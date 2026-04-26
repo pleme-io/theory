@@ -404,6 +404,33 @@ renderers should refuse to emit a workload that violates them:
    a `tameshi`-attested test asserting that idle = 0 pods after
    `cooldownPeriod + slack`. Failing this test fails the gate.
 
+7. **Helm-first authoring.** *Every in-cluster workload is expressed
+   as a Helm chart consuming `pleme-lib` (and its sibling library
+   charts: `pleme-operator`, `pleme-worker`, `pleme-statefulset`,
+   `pleme-cronjob`, `pleme-microservice`, `pleme-web`).* Raw
+   `HelmRelease` blocks with values inline in the FluxCD tree are
+   drift — they bypass the breathability + observability defaults
+   the library charts encode. When wrapping an upstream chart
+   (Authentik, KEDA, FluxCD, cert-manager…), do it via an umbrella
+   chart that:
+     - declares the upstream chart as a `dependencies:` entry,
+     - adds the pleme-lib-flavored sidecar resources on top
+       (ScaledObject for breathability, ServiceMonitor + PrometheusRule
+       for observability, NetworkPolicy when `networkPolicy.enabled`),
+     - exposes a *minimal opinionated values surface* — any defaults
+       the cluster wouldn't routinely override stay inside the umbrella.
+   Pangea-rendered Terraform JSON is the only acceptable alternative
+   to Helm, and only for resources outside the cluster (cloud-side IaC,
+   edge SSO config like Cloudflare Zero Trust, DNS records). Anything
+   running *inside* the cluster goes through Helm.
+
+   Renderer enforcement: a `PangeaArchitecture` whose target is
+   `kubernetes` and whose closure includes a raw `HelmRelease` with
+   inline `values:` should fail validation with a hint to the matching
+   library chart. Exception list lives in
+   [`pangea-architectures/CLAUDE.md`](../pangea-architectures/CLAUDE.md)
+   under "approved raw-Helm exceptions" (currently empty).
+
 ## VIII. Open frontiers
 
 - **Predictive pre-warming.** A scheduled fleet push at 09:00 UTC
