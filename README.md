@@ -10,11 +10,46 @@ and points at this repo for the shared frame.
 
 ## What's in this repo
 
+The theory expanded across two generations. **Read in this order:**
+
+### Foundation (read first)
+
 | File | Purpose |
 |---|---|
-| [`THEORY.md`](./THEORY.md) | The unified theory in one document. Nine parts: frame, language, structure, motion, verification, generation, operation, connecting threads, quick reference. |
-| [`VOCABULARY.md`](./VOCABULARY.md) | Canonical term glossary. Every named concept, verb, primitive — defined once. Splits terms that have historically been used with multiple meanings (convergence-as-lattice vs convergence-as-process, proof-as-verification vs proof-as-attestation, etc.). |
-| [`CLAUDE.md`](./CLAUDE.md) | Repo-level instructions for AI agents editing this material. |
+| [`THEORY.md`](./THEORY.md) | The unified theory in one document. Nine parts: frame, language, structure, motion, verification, generation, operation, connecting threads, quick reference. The 12 pillars live here. |
+| [`VOCABULARY.md`](./VOCABULARY.md) | Canonical term glossary. Every named concept defined once. |
+
+### Generation 1 (the WASM/WASI runtime + tatara-lisp packaging)
+
+The fourteen documents added 2026-04-26 cover the runtime, packaging,
+patterns, and deployment story. **Read in this order** — each builds
+on the prior:
+
+| # | File | One-line summary |
+|---|---|---|
+| 1 | [`META-FRAMEWORK.md`](./META-FRAMEWORK.md) | The 4-layer compute hierarchy + decision tree for "where does this go?" |
+| 2 | [`SCRIPTING.md`](./SCRIPTING.md) | Tatara-lisp as canonical scripting standard |
+| 3 | [`BREATHABILITY.md`](./BREATHABILITY.md) | Fleet-wide use-causes-spin-up + helm-first invariant |
+| 4 | [`TATARA-PACKAGING.md`](./TATARA-PACKAGING.md) | Git+nix native, content-addressed, no separate package manager |
+| 5 | [`WASM-STACK.md`](./WASM-STACK.md) | The runtime — 5 program shapes, capability tokens, breathability per shape |
+| 6 | [`WASM-PATTERNS.md`](./WASM-PATTERNS.md) | 49-pattern cookbook |
+| 7 | [`WASM-PACKAGING.md`](./WASM-PACKAGING.md) | URL grammar (`github:owner/repo/path?ref=tag`) + cache layout |
+| 8 | [`WASM-RUNTIME-COMPLETE.md`](./WASM-RUNTIME-COMPLETE.md) | Closes the 3 runtime loops: elasticity, container images, recursive bootstrap |
+| 9 | [`LISP-YAML-CONTROLLERS.md`](./LISP-YAML-CONTROLLERS.md) | Lisp logic + YAML policy + tiny escape hatches; 4 authoring tiers |
+| 10 | [`FLEET-DECLARATION.md`](./FLEET-DECLARATION.md) | Cluster's whole program inventory in one Helm release; perfect-state contract |
+| 11 | [`HELLO-WORLD-LIVE.md`](./HELLO-WORLD-LIVE.md) | Canonical "we got there" doc — the proof + standardization mandates |
+| 12 | [`TATARA-CODEGEN.md`](./TATARA-CODEGEN.md) | OpenAPI → tatara-lisp domain via homoiconic Sexp transformation |
+| 13 | [`TATARA-CODEGEN-MATRIX.md`](./TATARA-CODEGEN-MATRIX.md) | Same pattern across gRPC, GraphQL, Terraform, SQL DDL, K8s CRDs, MCP, CLI |
+| 14 | [`LIVE-DEPLOYMENT.md`](./LIVE-DEPLOYMENT.md) | Hot-replacement triggered by git hashes; 4 state-preservation levels |
+| 15 | [`RUST-LISP-EMBEDDING.md`](./RUST-LISP-EMBEDDING.md) | Bidirectional hosting — Rust hosts Lisp + Lisp hosts Rust (3 paths) |
+| 16 | [`EXTENSIBILITY.md`](./EXTENSIBILITY.md) | The closing principle — boundlessly extensible by mechanical extension of 5 patterns |
+| 17 | [`BASE-PRIMITIVES.md`](./BASE-PRIMITIVES.md) | The 31 base primitives across 5 axes; every higher-level pattern is a tuple |
+
+### Repo conventions
+
+| File | Purpose |
+|---|---|
+| [`CLAUDE.md`](./CLAUDE.md) | Repo-level instructions for AI agents editing this material |
 
 ## What's NOT in this repo
 
@@ -46,13 +81,28 @@ the fleet, `THEORY.md` wins and the other document is a bug to fix.
 no substitute for reading it linearly. Keep `VOCABULARY.md` open in another
 tab for term lookups.
 
-**Returning:** jump to the part you need. Each of the nine parts stands on
-its own well enough that you don't have to re-read the whole thing.
+**For the runtime + packaging story** (Generation 1): walk the 17 docs above
+in numbered order. Each is ~200-500 lines; the entire generation reads in
+~3 hours and lands a complete operational frame for WASM/WASI on Kubernetes
+with tatara-lisp authoring. The progression compounds — early docs name
+primitives, middle docs combine them, late docs prove the closure.
+
+**Returning:** jump to the part you need. Each document stands on its own
+well enough that you don't have to re-read the whole thing.
 
 **As an AI agent:** if a user asks you a question whose answer depends on
 the pleme-io theoretical frame, load the relevant section(s) of
 `THEORY.md` and cite them. Don't paraphrase from memory. Don't re-derive
 from other repos' CLAUDE.mds — those are downstream of this document.
+
+**For implementation work**: cross-reference [`BASE-PRIMITIVES.md`](./BASE-PRIMITIVES.md)
+to identify which of the 31 primitives the work touches, then drill into
+the matching detailed doc:
+- compute primitives → `WASM-STACK.md`
+- composition primitives → `WASM-PATTERNS.md` + `LISP-YAML-CONTROLLERS.md`
+- lifecycle primitives → `LIVE-DEPLOYMENT.md`
+- infrastructure primitives → `BREATHABILITY.md`
+- delivery primitives → `TATARA-PACKAGING.md` + `WASM-PACKAGING.md`
 
 ## How this document evolves
 
