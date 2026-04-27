@@ -16,6 +16,7 @@ The theory expanded across two generations. **Read in this order:**
 
 | File | Purpose |
 |---|---|
+| [`CONSTRUCTIVE-SUBSTRATE-ENGINEERING.md`](./CONSTRUCTIVE-SUBSTRATE-ENGINEERING.md) | **★ The methodology.** Definition of Constructive Substrate Engineering (CSE), aka Knowable Construction — the named pleme-io approach to building software systems. Read this *before* THEORY.md if you want the operational frame; read THEORY.md *with* this if you want the underlying frame. The renderer-reliability section is non-optional. |
 | [`THEORY.md`](./THEORY.md) | The unified theory in one document. Nine parts: frame, language, structure, motion, verification, generation, operation, connecting threads, quick reference. The 12 pillars live here. |
 | [`VOCABULARY.md`](./VOCABULARY.md) | Canonical term glossary. Every named concept defined once. |
 
