@@ -85,7 +85,7 @@ dispatch faster than the configured pace.
 |---|---|---|
 | 1 | A producer cannot dispatch HTTP to the upstream API directly. | Type signature: producers see `Publisher<U>` not `Client<U>`. |
 | 2 | At most one in-flight request per upstream credential at a time. | NATS consumer `MaxAckPending: 1`. |
-| 3 | Sustained dispatch rate ≤ `requests_per_minute`. | `LeakyBucket` admits one token per `60 / rpm` seconds. |
+| 3 | Sustained dispatch rate ≤ `quota_pct × X-RateLimit-Limit / 60` (dynamically tracking the upstream's reported ceiling). | `LeakyBucket` admits one token per `60 / rpm` seconds; rpm updated on every response via `record_observed_limit`. |
 | 4 | Upstream budget pressure shrinks the rate. | `pressure_warn_pct` / `pressure_critical_pct` thresholds in worker; halves / quarters / eighths the bucket refill rate. |
 | 5 | Wallclock-aligned cron-shaped traffic is forbidden (anti-fingerprint). | `jitter_pct ≥ 0.10` in worker config (rejected at chart-render time if lower). |
 | 6 | ETag conditional reads don't consume budget. | Worker forwards `If-None-Match` from the operator's ETag cache; 304 responses don't take a bucket token. |
@@ -101,37 +101,91 @@ choices in `samba` + `pleme-lib.rate-limit-worker.*` templates.
 ## IV. The six compounding layers
 
 Each lower layer is a *load-bearing primitive* the higher layers
-stand on. New consumers (the next throttle) live entirely at L4 — the
-lower layers never need to be re-implemented.
+stand on. New consumers (the next upstream) live entirely at L4 —
+the lower layers never need to be re-implemented.
 
 ```
-L5 Operator integration  (defrate-limited-consumer …) Lisp form via #[derive(TataraDomain)]
-                         ────────────────────────────────────────────────────────────────────
-L4 Specific consumers    pleme-tend-throttle, pleme-datadog-throttle (future), …
-                         5-line Helm wrapper + ~30 LOC `impl UpstreamApi for FooClient`
-                         ────────────────────────────────────────────────────────────────────
-L3 Typed Rust primitive  samba — UpstreamApi trait, LeakyBucket, JetStreamPullWorker
-                         crates.io library; binaries depend, instantiate, run.
-                         ────────────────────────────────────────────────────────────────────
-L2 Generic broker        pleme-nats — broker-only chart; streams owned by consumers
-                         (Cilium-style identity, not central registry)
-                         ────────────────────────────────────────────────────────────────────
-L1 pleme-lib templates   _jetstream_stream.tpl, _jetstream_init.tpl,
-                         _rate_limit_worker.tpl, _rate_limit_alerts.tpl
-                         every chart drops in {{ include … }} and gets the shape
-                         ────────────────────────────────────────────────────────────────────
+L5 Lisp form        (defrate-limited-consumer …) via #[derive(TataraDomain)]   — aspirational
+                    ────────────────────────────────────────────────────────────────────────
+L4 Consumer         pleme-tend-throttle (the canonical and currently-only consumer)
+                    ~30 LOC `impl UpstreamApi for FooClient` + ~5-line Helm values
+                    ────────────────────────────────────────────────────────────────────────
+L4' Operator        pleme-tend-operator: fleet_watch + fleet_advance_consumer + nats_throttle
+                    Same binary as the consumer (operator + throttle subcommands)
+                    ────────────────────────────────────────────────────────────────────────
+L3 Rust primitive   samba — UpstreamApi trait, LeakyBucket (dynamic-rate via observed_limit),
+                    JetStreamPullWorker, standardized samba_* metrics, HTTP server
+                    ────────────────────────────────────────────────────────────────────────
+L2 Generic broker   pleme-nats — broker-only chart; streams owned by consumers
+                    (Cilium-style identity, not central registry)
+                    ────────────────────────────────────────────────────────────────────────
+L1 pleme-lib templates   _jetstream_stream.tpl + _rate_limit_worker.tpl
+                         + _jetstream_init.tpl + standardized alerts
+                         every chart drops in {{ include … }} and gets the whole shape
+                         ────────────────────────────────────────────────────────────────
 L0 Theory                this doc — names the pattern, lists invariants
                          (zero code, infinite leverage; never re-derived)
 ```
 
-| Layer | Repo / path | Status |
+| Layer | Path | Status |
 |---|---|---|
 | L0 | `pleme-io/theory/RATE-LIMITED-CONSUMERS.md` | **★ load-bearing** (this doc) |
-| L1 | `pleme-io/helmworks/charts/pleme-lib/templates/_{jetstream_*,rate_limit_*}.tpl` | **★ load-bearing** |
-| L2 | `pleme-io/helmworks/charts/pleme-nats/` | **★ load-bearing** |
-| L3 | `pleme-io/samba/` (Rust crate) | **◐ scaffold** (trait + types, future workers stand on it) |
-| L4 | `pleme-io/helmworks/charts/pleme-tend-throttle/` (canonical reference) | **◐ chart ready, awaiting `tend throttle` subcommand** |
-| L5 | `(defrate-limited-consumer …)` via `#[derive(TataraDomain)]` | **○ aspirational** (next compounding move) |
+| L1 | `pleme-io/helmworks/charts/pleme-lib` v0.12.0+ | **★ load-bearing** |
+| L2 | `pleme-io/helmworks/charts/pleme-nats` v0.2.x | **★ load-bearing** |
+| L3 | `pleme-io/samba` v0.1.0 (dynamic-rate) | **★ load-bearing** |
+| L4' | `pleme-io/helmworks/charts/pleme-tend-operator` v0.5.x — fleet_watch + bridge | **★ load-bearing** |
+| L4 | `pleme-io/helmworks/charts/pleme-tend-throttle` v0.3.x | **★ load-bearing** |
+| L5 | `(defrate-limited-consumer …)` via `#[derive(TataraDomain)]` | **○ aspirational** |
+
+### IV.1 The single load-bearing knob: `quota_pct` × observed limit
+
+samba's `LeakyBucket` derives its admission rate dynamically from
+**what the upstream reports**, not from a hardcoded constant:
+
+```text
+target_rpm = quota_pct × X-RateLimit-Limit / 60
+```
+
+`X-RateLimit-Limit` is observed on every response and stashed via
+`LeakyBucket::record_observed_limit`. So `quotaPct: 0.01` ("use 1%
+of the upstream's reported quota") tracks the credential's actual
+ceiling. For GitHub:
+
+| Token type | GitHub limit | quota_pct=0.01 → rpm |
+|---|---|---|
+| Classic / fine-grained PAT | 5000/hr | 0.83 (period ~72s) |
+| GitHub App installation | 15000/hr | 2.5 (period ~24s) |
+| GitHub Enterprise custom | varies | derived from observed |
+
+Cold start uses `INITIAL_BUDGET_PER_HOUR` from the trait const as a
+fallback; first response with the header re-rates the bucket.
+
+### IV.2 Continuous fleet-wide watching: fleet_watch + bridge
+
+The operator (L4') runs a `fleet_watch` task alongside the
+FlakeUpdatePolicy reconciler. It:
+
+1. Periodically (default 1h) enumerates the configured GitHub org
+   via `list_repos` API. **Auto-discovers new repos** as they're
+   created.
+2. Filters to repos that have a `flake.nix` at HEAD.
+3. Runs a round-robin scheduler ticking at the throttle's drain rate.
+   Each tick publishes one refresh-job through the NATS throttle.
+4. Subscribes to `tend.github.jobs.results.>` and tracks per-repo
+   state. Detects advances by comparing `result.head.info.upstream_rev`
+   to its last-seen rev.
+5. On advance, publishes a typed `FleetAdvanceEvent` to
+   `tend.fleet.advances.<sanitized-key>`.
+
+A separate `fleet_advance_consumer` task subscribes to
+`tend.fleet.advances.>` and **annotates every enrolled
+FlakeUpdatePolicy CR** with `tend.pleme.io/last-fleet-advance`. The
+annotation change triggers an immediate kube-rs Controller reconcile
+→ discovery hits the hot ETag cache → Proposal lands within seconds.
+
+For Auto-mode inputs (e.g. `fenix`, `kindling`): fleet-wide upstream
+advance → proposal → gates → flake.lock updated + git pushed by the
+operator within seconds.
 
 ---
 

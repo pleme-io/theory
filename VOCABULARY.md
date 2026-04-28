@@ -194,6 +194,19 @@ into the unified theory.
 | **forge** | The CI/CD build platform. Nix pipeline → Attic cache → GHCR → deployments. | `forge/` |
 | **Attic** | Shared Nix cache. The "shared convergence memory" in the Nix/sui duality. | External |
 | **Live convergence mutation** | Merging new elements into a converging system without pausing. Gated by schema + compliance + test + integrity. | THEORY.md §VII.6 |
+| **saguão** | The umbrella name for the fleet-wide identity + authorization + self-service portal system. Composes four typed primitives (passaporte, crachá, vigia, varanda). ASCII fold: `saguao`. | `theory/SAGUAO.md` |
+| **passaporte** | The typed identity primitive of saguão. Typed Rust wrapper over Authentik (OIDC IdP) federated to Google. One instance per fleet, hosted at `auth.quero.cloud`. | SAGUAO.md §III.1 |
+| **crachá** | The typed authorization primitive of saguão. `AccessPolicy` CRD authored as `(defcrachá …)`; controller + gRPC API at `cracha.quero.cloud`. ASCII fold: `cracha`. | SAGUAO.md §III.2 |
+| **vigia** | The per-cluster forward-auth data plane of saguão. Rust HTTP service consulted by every Ingress's auth-url annotation. Phase-1 role filled by the Authentik embedded outpost. | SAGUAO.md §III.3 |
+| **varanda** | The family-facing PWA of saguão. Yew + Cloudflare Pages, deployed to `quero.cloud` and every `<location>.quero.cloud` and `<cluster>.<location>.quero.cloud`. | SAGUAO.md §III.4 |
+| **Fleet IdP** | The single OIDC provider serving all of saguão (today: Authentik wrapped by passaporte). | SAGUAO.md §VI.1 |
+| **Fleet authz API** | The single source of truth for fleet-wide authorization (today: crachá gRPC + REST at `cracha.quero.cloud`). | SAGUAO.md §III.2 |
+| **Fleet edge (saguão sense)** | The control-plane services hosted at apex `quero.cloud` (passaporte, crachá, varanda fleet view). Distinct from per-cluster ingress edges. | SAGUAO.md §II.2 |
+| **Saguão control plane** | The fleet-wide identity + authz services (passaporte + crachá). Lives once per fleet, hosted on a designated cluster. | SAGUAO.md §II.1 |
+| **Saguão data plane** | The per-cluster forward-auth enforcement (vigia, or Authentik outpost in Phase 1). Lives on every cluster. | SAGUAO.md §II.1 |
+| **Break-glass mode (vigia)** | A vigia configuration that bypasses crachá entirely for the `family` group during control-plane outages. Audit-logged via the tameshi heartbeat chain. | SAGUAO.md §VI.3 |
+| **Bookmark redirect Worker** | Optional one-shot Cloudflare Worker deployed during Phase 4 of the saguão migration to 301-redirect 3-part hostnames to 4-part. Retired after ~30 days. | SAGUAO.md §VII.4 |
+| **Four-part hostname rule** | Every reachable workload service in the fleet uses `<app>.<cluster>.<location>.quero.cloud`. Reserved 2-part forms (e.g. `auth.quero.cloud`) are control-plane only. | SAGUAO.md §IV.1, IV.2 |
 
 ---
 
@@ -214,6 +227,11 @@ into the unified theory.
 | **bordado** | Overlay / layered pattern. Embroidery. Stitch on top without disturbing the base. |
 | **caderneta** | Registry / notebook. Small book of records. Operator's working memory. |
 | **apurador** | Validator / inspector. Examiner. Runs checks. |
+| **saguão** | Lobby / foyer. The room every visitor passes through. The umbrella name for the fleet identity + authz + portal system. |
+| **varanda** | Porch / front balcony. Where guests are first received. The family-facing PWA of saguão. |
+| **passaporte** | Passport. The credential proving who you are. The fleet IdP wrapper. |
+| **crachá** | Badge. The credential saying which rooms you can enter. The typed AccessPolicy primitive. |
+| **vigia** | Sentinel / guard. The figure watching every door. The per-cluster forward-auth proxy. |
 
 ---
 

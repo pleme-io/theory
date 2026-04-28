@@ -45,6 +45,8 @@ on the prior:
 | 15 | [`RUST-LISP-EMBEDDING.md`](./RUST-LISP-EMBEDDING.md) | Bidirectional hosting — Rust hosts Lisp + Lisp hosts Rust (3 paths) |
 | 16 | [`EXTENSIBILITY.md`](./EXTENSIBILITY.md) | The closing principle — boundlessly extensible by mechanical extension of 5 patterns |
 | 17 | [`BASE-PRIMITIVES.md`](./BASE-PRIMITIVES.md) | The 31 base primitives across 5 axes; every higher-level pattern is a tuple |
+| 18 | [`SAGUAO.md`](./SAGUAO.md) | Fleet-wide identity + authz + self-service portal — passaporte, crachá, vigia, varanda. Canonical answer to "let my family sign in once and self-serve across every homelab." |
+| 19 | [`SAGUAO-MIGRATION.md`](./SAGUAO-MIGRATION.md) | The seven-phase staged-diff migration of the rio cluster from Cloudflare Access to saguão. Companion to SAGUAO.md; concrete file-level diffs with verification commands. Nothing applied yet. |
 
 ### Repo conventions
 

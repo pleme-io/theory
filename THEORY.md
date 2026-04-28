@@ -798,6 +798,41 @@ The mutation ingress system validates before merging: schema validation
 → compliance check (kensa) → test gate (kenshi) → integrity verification
 (sekiban) → canary analysis → merge.
 
+### VII.7 Saguão — fleet-wide identity, authorization, and self-service portal
+
+FluxCD answers "git → cluster" — declarative state into running
+workloads. Saguão answers the orthogonal direction: **human → service**
+across the entire fleet, with one sign-in, one typed authz model, and
+one self-service portal.
+
+Four typed primitives compose:
+
+- **passaporte** — fleet IdP (Authentik wrapped, Google federated) at
+  `auth.quero.cloud`. One per fleet.
+- **crachá** — typed `AccessPolicy` CRD authored as `(defcrachá …)` at
+  `cracha.quero.cloud`. The single source of truth for "who can see
+  what."
+- **vigia** — per-cluster forward-auth Rust service consulted by every
+  Ingress. One per cluster.
+- **varanda** — Yew PWA at `quero.cloud` and every
+  `<location>.quero.cloud` and `<cluster>.<location>.quero.cloud`.
+  Renders the user's portal slice.
+
+The split is **fleet control plane** (passaporte + crachá at the apex
+zone) vs **per-cluster data plane** (vigia at every cluster). Cloudflare
+is reduced to transparent transport (DNS + Tunnel + edge TLS); Cloudflare
+Access is removed from the architecture. Hostnames follow the canonical
+4-part rule `<app>.<cluster>.<location>.quero.cloud` so cluster N never
+collides with cluster M.
+
+Adding a cluster, location, app, or family member is a single typed
+declaration that propagates through DNS, vigia HelmRelease, varanda's
+Cloudflare Pages routing, and the crachá cluster registry.
+
+Canonical doc: [`SAGUAO.md`](./SAGUAO.md). Tier-1 fleet primitive,
+peer of `pangea-jit-builders` (capacity), `caixa-mesh` (per-cluster
+Aplicacao composition), `tameshi` (attestation chain).
+
 ---
 
 ## Part VIII — The Connecting Threads
