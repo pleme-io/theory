@@ -9,23 +9,31 @@
 Typescape-render-first: the `Action` domain in arch-synthesizer leads,
 everything else renders from it.
 
-| # | Phase | Duration | Status | Outcome |
-|---|---|---|---|---|
-| 0 | Lock down the design | 1 hour | ✅ done 2026-04-27 | CONSTRUCTIVE-ACTIONS.md + this plan + pleme-io/CLAUDE.md section + pleme-actions skill |
-| 1 | `Action` domain in arch-synthesizer | 1 day | pending | `arch-synthesizer/src/action_domain.rs` — typed Rust struct + `#[derive(TataraDomain)]` auto-generates the `(defaction …)` Lisp parser + render-target attrs |
-| 2 | `pleme-actions-shared` library crate | 0.5 day | pending (parallel to 1) | Rust crate with `INPUT_<name>` env-var parsing, step-summary builders, attestation hooks. Published to crates.io. |
-| 3 | Substrate primitive | 1 day | pending | `substrate/lib/rust-action-release-flake.nix` — extends `rust-tool-release-flake.nix` with action.yml emission + binary-download glue |
-| 4 | Rendering pipeline + repo-forge `rust-action` archetype | 1 day | pending | `arch-synthesizer/src/action_domain/render.rs` projects an `Action` value to the full file set; `repo-forge/archetypes/rust-action/` provides the template surface; `repo-forge new --archetype rust-action` produces a working repo |
-| 5 | First action: `terragrunt-apply` | 1.5 days | pending | `(defaction "terragrunt-apply" …)` in `pleme-actions-catalog.lisp` → render → fill in operator-authored `src/main.rs` → tag `v0.1.0` |
-| 6 | Two more actions: `k8s-pause-verify` + `helmworks-render-check` | 1 day each | pending | Pattern proven across 3 distinct shapes (TF, K8s, Helm) |
-| 7 | Migrate first downstream consumer | 0.5 day | pending | Any pleme-io-fleet workflow consuming terragrunt + paused-K8s-deploy drops from ~200 lines of inline YAML to ~30 by consuming the published actions |
-| 8 | `pleme-actions` index repo | 0.5 day | pending | README hub, auto-generated version compat matrix from the typescape, contributing guide |
-| 9 | First public release announcement | 0.5 day | pending | Optional — once 5+ actions stable, surface to broader pleme-io ecosystem |
+| # | Phase | Status | Outcome |
+|---|---|---|---|
+| 0 | Lock down the design | ✅ done 2026-04-27 | CONSTRUCTIVE-ACTIONS.md + this plan + pleme-io/CLAUDE.md section + pleme-actions skill |
+| 1 | `Action` domain in arch-synthesizer | ✅ done 2026-04-27 | 47 typed proofs (`arch-synthesizer @ 91c51a6` + `2b0924a`) — Action + ActionInput/Output + InputType/OutputType + ActionBehavior + RustDependency + RuntimeTool + SemverPolicy + AttestationPolicy + PauseContract + SecretDelivery + 3 fixtures + render |
+| 2 | `pleme-actions-shared` library crate | ✅ done 2026-04-28 | github.com/pleme-io/pleme-actions-shared — 38 tests; Input/Output/StepSummary/ActionError/log; ready for crates.io |
+| 3 | Substrate primitive | ✅ done 2026-04-28 | `substrate @ 94e6a44` — `lib/build/rust/action-yml-render.nix` + `action-release-flake.nix` + `lib/rust-action-release-flake.nix` shim |
+| 4 | repo-forge `rust-action` archetype | ✅ done 2026-04-28 (detection only) | `repo-forge @ ebbfa4e` — declared in `archetypes.lisp`; full render-path wiring deferred (substrate primitive is the contract; phase-5 consumers prove the pattern works without the archetype's render path) |
+| 5 | First wave: 3 actions | ✅ done 2026-04-28 | terragrunt-apply (7) + k8s-pause-verify (4) + helmworks-render-check (7) — 18 tests across 3 distinct shapes (TF, K8s, Helm) |
+| 6 | Library expansion: 8 more actions | ✅ done 2026-04-28 | argocd-app-sync (3) + kubectl-wait (5) + github-app-installation-token (2) + slack-notify (7) + eks-kubeconfig-update (2) + flux-reconcile (3) + tameshi-attest (3) + multi-arch-image-release (3) — 28 tests; lifted forge patterns get distinct OSS repos |
+| 7 | First downstream consumer migration | ⏳ pending | Whichever fleet workflow next needs a maintenance touch. Action library is ready. |
+| 8 | `pleme-actions` index hub + reusable workflows | ✅ done 2026-04-28 | github.com/pleme-io/pleme-actions — README catalog + VERSIONS.md + CONTRIBUTING.md + ATTESTATION.md + reusable `release-action.yml` + `test-action.yml`. Every action's per-repo CI/release is a 5-line shim. **terragrunt-apply v0.1.0 released end-to-end** validating the SDLC. |
+| 9 | First public release announcement | ⏳ optional | Once 5+ actions stable at v1.0.0, surface to broader pleme-io ecosystem. |
 
-**Total estimate:** ~8 days of focused work, spread across multiple
-sessions. Phases 1, 2 are independent and can run in parallel; phase 3
-depends on phase 2's interface; phase 4 depends on phases 1+3; phase 5
-needs all four prior phases.
+**11 actions live** as of 2026-04-28. **Library inventory**:
+
+| Domain | Actions |
+|---|---|
+| IaC | `terragrunt-apply` |
+| Kubernetes | `kubectl-wait` · `eks-kubeconfig-update` · `k8s-pause-verify` |
+| GitOps | `argocd-app-sync` · `flux-reconcile` |
+| Helm | `helmworks-render-check` |
+| Auth + signaling | `github-app-installation-token` · `slack-notify` |
+| Release pipeline | `tameshi-attest` · `multi-arch-image-release` |
+
+Adding action 12+ is now: catalog declaration + ~150 lines of `src/main.rs` + `git push --tags`. The reusable SDLC workflow does the rest.
 
 ---
 
