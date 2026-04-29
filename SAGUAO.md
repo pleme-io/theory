@@ -479,21 +479,19 @@ shape exists for direct access and bookmarking.
 ### V.1. The single typed declaration
 
 When cluster N comes online, the entirety of the saguão wiring is
-expressed as **one Lisp form** in the fleet-clusters declaration
-(canonical home: `pleme-io/nix/lib/pleme-fleet.nix` for DNS,
-`pangea-architectures/workspaces/<location>/` for cluster-spec):
+expressed as **one Lisp form** authored anywhere convenient
+(canonically: `pleme-io/cracha/examples/<name>.lisp`):
 
 ```clojure
 (defcluster
-  :name        mar
-  :location    parnamirim
-  :country     "RN, Brazil"
-  :role        consumer        ; consumer | control-plane | hybrid
-  :saguao      {:vigia        true
-                :varanda      true
-                :passaporte   nil       ; nil = consume fleet's passaporte
-                :cracha       nil}      ; nil = consume fleet's crachá
-  :services    [vault photos jellyfin home-assistant])
+  :name     "mar"
+  :location "parnamirim"
+  :country  "RN, Brazil"
+  :role     consumer        ; consumer | control-plane | hybrid
+  :saguao   (:vigia      #t
+             :varanda    #t
+             :passaporte #f       ; #f = consume fleet's passaporte
+             :cracha     #f))     ; #f = consume fleet's crachá
 ```
 
 `:role consumer` means this cluster runs `vigia` (data plane) +
@@ -502,6 +500,69 @@ passaporte + crachá. `:role control-plane` means this cluster
 *hosts* passaporte + crachá in addition to its own vigia/varanda
 (today: rio). `:role hybrid` means this cluster hosts a fallback
 passaporte/crachá replica (future, for HA — see §VI.3).
+
+**The renderer (`cracha render cluster <file.lisp> --out dir/`)
+emits 4 artifacts from this single declaration:**
+
+| File | Destination repo |
+|---|---|
+| `nix-fleet-domains-<name>.nix.fragment` | `pleme-io/nix/lib/pleme-fleet.nix` (locations map) |
+| `vigia-<name>-helmrelease.yaml` | `pleme-io/k8s/clusters/<name>/infrastructure/vigia/release.yaml` |
+| `pangea-cloudflare-pleme-<name>-additions.yaml` | `pleme-io/pangea-architectures/workspaces/cloudflare-pleme/domains/quero.cloud.yaml` |
+| `cracha-cluster-registration-<name>.yaml` | ServiceCatalog snippet for the control-plane cluster |
+
+The operator places each file (or — preferably — `feira cluster
+apply` does the multi-repo write, planned). Adding cluster N is
+**one Lisp edit + one render command + four `cp` operations**, no
+hand-authored YAML across 4 repos.
+
+### V.1.5. Fleet-level declaration
+
+For "what's in the whole fleet?", the umbrella `(deffleet …)` form
+composes every cluster + names the control-plane endpoints:
+
+```clojure
+(deffleet
+  :name "pleme"
+  :tld  "quero.cloud"
+  :passaporte (:host "auth.quero.cloud"   :on-cluster "rio")
+  :cracha     (:host "cracha.quero.cloud" :on-cluster "rio")
+  :clusters
+  ((:name "rio" :location "bristol" :role control-plane
+    :saguao (:vigia #t :varanda #t :passaporte #t :cracha #t))
+   (:name "mar" :location "parnamirim" :role consumer
+    :saguao (:vigia #t :varanda #t :passaporte #f :cracha #f))))
+```
+
+`cracha render fleet examples/pleme.lisp --out out/` invokes the
+per-cluster renderer for every cluster + emits a `fleet-summary.md`
+naming the control-plane endpoints + cluster topology.
+
+### V.1.6. ServiceCatalog auto-derivation
+
+Per §III.2, ServiceCatalog used to require an explicit CRD entry
+for every service. **As of cracha-controller v0.1**, the
+controller watches `helm.toolkit.fluxcd.io/v2/HelmRelease` resources
+labeled `app.kubernetes.io/part-of=saguao-service` and
+auto-derives ServiceCatalog entries from them. The contract:
+
+```yaml
+# In every lareira-<service> HelmRelease metadata:
+metadata:
+  labels:
+    app.kubernetes.io/part-of: saguao-service     # required
+    app.kubernetes.io/name: vault                 # required → service slug
+    pleme.io/cluster: rio                         # required → cluster name
+  annotations:
+    saguao.pleme.io/display-name: "Vaultwarden"   # required
+    saguao.pleme.io/icon: "https://..."           # optional
+    saguao.pleme.io/description: "Password manager" # optional
+```
+
+Adding a service is now **one HelmRelease**; no separate
+ServiceCatalog edit. Explicit `ServiceCatalog` CRD entries still
+work and win on `(slug, cluster)` collision (escape hatch for
+services not deployed via lareira).
 
 ### V.2. What propagates from one declaration
 

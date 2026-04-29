@@ -207,6 +207,12 @@ into the unified theory.
 | **Break-glass mode (vigia)** | A vigia configuration that bypasses crachá entirely for the `family` group during control-plane outages. Audit-logged via the tameshi heartbeat chain. | SAGUAO.md §VI.3 |
 | **Bookmark redirect Worker** | Optional one-shot Cloudflare Worker deployed during Phase 4 of the saguão migration to 301-redirect 3-part hostnames to 4-part. Retired after ~30 days. | SAGUAO.md §VII.4 |
 | **Four-part hostname rule** | Every reachable workload service in the fleet uses `<app>.<cluster>.<location>.quero.cloud`. Reserved 2-part forms (e.g. `auth.quero.cloud`) are control-plane only. | SAGUAO.md §IV.1, IV.2 |
+| **Cluster (saguão typed)** | The `cracha_core::Cluster` Rust type — single source of truth for one homelab cluster's saguão integration. Authored as `(defcluster :name "mar" :location "parnamirim" :role consumer :saguao (:vigia #t :varanda #t :passaporte #f :cracha #f))`. | `pleme-io/cracha/crates/cracha-core/src/cluster.rs` |
+| **Fleet (saguão typed)** | The `cracha_core::Fleet` Rust type — umbrella composition of every cluster + the passaporte/crachá endpoints. Authored as `(deffleet :clusters … :passaporte … :cracha …)`. The typed answer to "what's in this fleet?". | `cracha-core::Fleet`; SAGUAO.md §V.1.5 |
+| **ClusterRole** | One of `consumer` (vigia + varanda only), `control-plane` (also hosts passaporte + crachá), `hybrid` (HA replica). Default: consumer. | `cracha-core::ClusterRole` |
+| **cracha-cli** | The author-side CLI (`cracha render fleet|cluster|policy`) that reads typed Lisp forms and emits multi-repo deployable artifacts. Removes the "N edits across N repos" seam for cluster onboarding. | `pleme-io/cracha/crates/cracha-cli` |
+| **saguão-service label contract** | Every gated lareira HelmRelease MUST carry labels `app.kubernetes.io/part-of=saguao-service`, `app.kubernetes.io/name=<slug>`, `pleme.io/cluster=<cluster>` plus annotation `saguao.pleme.io/display-name`. crachá-controller watches HelmReleases with this label and auto-derives ServiceCatalog entries. | SAGUAO.md §V.1.6 |
+| **ServiceCatalog auto-derivation** | The cracha-controller's HelmRelease watcher that builds the in-memory ServiceCatalog from observed HelmReleases (with the saguão-service label contract). Removes the duplicate-authoring seam between lareira HelmRelease + ServiceCatalog CRD. Explicit ServiceCatalog CRD entries still work and win on `(slug, cluster)` collision. | `cracha-controller::helmrelease` |
 
 ---
 
