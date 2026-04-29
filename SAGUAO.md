@@ -347,10 +347,11 @@ Authentik or vigia directly.**
 |---|---|
 | **Repo** | `pleme-io/varanda` |
 | **Crate** | `varanda` (Rust + Yew, WASM) |
-| **Deployable** | Cloudflare Pages (Freescape) — single SPA bundle deployed to `quero.cloud` and every `<location>.quero.cloud` and every `<cluster>.<location>.quero.cloud` (same bundle, hostname picks the slice it renders) |
+| **Deployable** | Cloudflare Pages (Freescape) — single SPA bundle deployed to `quero.cloud` + `www.quero.cloud` + every `<location>.quero.cloud` + every `<cluster>.<location>.quero.cloud` (same bundle, hostname picks the slice it renders). Aliases (`www`, `app`, `home`) collapse to Fleet view. |
 | **Typed form** | `(defvaranda :host quero.cloud :passaporte-host auth.quero.cloud :cracha-api https://cracha.quero.cloud :ishou-tokens default :modes [fleet location cluster])` |
+| **Design system** | Consumes [`ishou`](https://github.com/pleme-io/ishou) at build time — the central pleme-io tokens (color / typography / spacing / shadow / motion / brand). The flake input renders `ishou-tokens.css` byte-identically across every consumer. The `industrial.css` override layer adds varanda's mechanical aesthetic on top of those tokens. **NEVER hand-author colors/fonts/spacing in varanda** — extend ishou first. Full design language: [`varanda/docs/design.md`](https://github.com/pleme-io/varanda/blob/main/docs/design.md). |
 | **What it owns** | The user-facing front door. Reads the passaporte session cookie (set by Authentik when the user signs in); queries the crachá REST API for "what can I see"; renders the appropriate slice based on hostname (apex = fleet view, location subdomain = location view, cluster subdomain = cluster view); generates the deep links to the actual services. |
-| **What it does NOT own** | Authentication (passaporte handles sign-in via redirect-to-Authentik), authorization (crachá), or any protected user data (the actual services hold their own data). |
+| **What it does NOT own** | Authentication (passaporte handles sign-in via redirect-to-Authentik), authorization (crachá), or any protected user data (the actual services hold their own data). The Cloudflare configuration (Pages custom-domains, DNS records, Tunnel ingress) is owned by `pangea-architectures/workspaces/cloudflare-pleme/` and reconciled by **pangea-operator on rio** (see §VI.4 below). |
 
 **Why Cloudflare Pages.** varanda is a static SPA; it never holds
 secrets and never makes server-side decisions. Cloudflare Pages is
@@ -741,6 +742,52 @@ Cloudflare Tunnel itself has the same property: if the apex
 provider is down, the home-edge cluster's services are
 unreachable from the public internet. Mitigated by direct LAN
 access (`*.rio.lan` patterns) for in-home users.
+
+---
+
+## VI.4. Cloudflare = transport, reconciled by pangea-operator on rio
+
+The architecture's "Cloudflare is transport only" rule (§II.3) has a
+control-plane corollary: **the Cloudflare configuration itself is
+also reconciled from in-cluster, not from an operator workstation.**
+
+Mechanism: the `pangea.pleme.io/v1alpha1.InfrastructureTemplate` CRD
+shipped by [`pleme-io/pangea-operator`](https://github.com/pleme-io/pangea-operator)
+runs on rio. One InfrastructureTemplate (named `cloudflare-pleme`)
+points at the `cloudflare-pleme` workspace inside `pangea-architectures`
+and the `quero_cloud` template within. The operator clones the repo,
+synthesizes the workspace, and applies it via its embedded engine on
+every git commit + every `refreshInterval`.
+
+What this replaces: the workstation `bundle exec pangea apply
+quero_cloud` workflow. After this lands on rio
+(`k8s/clusters/rio/infrastructure/cloudflare-pleme/`), every
+`*.quero.cloud` Cloudflare change is a git commit, a Flux sync, and
+an operator reconcile — no operator-machine state required.
+
+What materializes via this template:
+
+- DNS records for every `pages_apps[*].custom_domains` entry (saguão front door + per-location + per-cluster portals)
+- Cloudflare Pages projects + per-domain bindings (varanda + zuihitsu)
+- Cloudflare Tunnel ingress for the cluster's gated services
+- Zone settings (TLS 1.2+, always-HTTPS, browser check, DNSSEC)
+
+The varanda Pages project's `custom_domains` list is THE source of
+truth for "what hostnames load varanda" — the four-part hostname
+rule (§IV.1) is enforced operationally by what's listed there. To
+add the `mar.parnamirim.quero.cloud` cluster portal once mar comes
+online: append `mar.parnamirim` to that list, commit, the operator
+reconciles, the new portal hostname loads varanda automatically.
+
+Bootstrap + operational guide:
+[`pleme-io/k8s/clusters/rio/infrastructure/cloudflare-pleme/README.md`](https://github.com/pleme-io/k8s/blob/main/clusters/rio/infrastructure/cloudflare-pleme/README.md).
+
+The `pages_apps:` field on the `CloudflareDomain` architecture is
+the typed extension that supports this — every static SPA gets one
+entry; the architecture stamps `cloudflare_pages_project` +
+`cloudflare_pages_domain` + `cloudflare_dns_record` per
+custom domain. Apex (`@`) is bound via Pages's apex-attachment
+(no explicit CNAME, avoids NS-record collision).
 
 ---
 
