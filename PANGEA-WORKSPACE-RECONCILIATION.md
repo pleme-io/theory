@@ -261,9 +261,14 @@ glue, not the DSL itself:
 
 **The migration shape (M8.1 → M8.5):**
 
-- **M8.1**: Audit + tabulate every C extension currently in
-  pangea-compiler's bundle. Output: `theory/PANGEA-COMPILER-CDEP-AUDIT.md`
-  with one row per dep, "removable / replaceable / blocked" status.
+- **M8.1** ✅ (2026-04-30): Audited Gemfile.lock; classified every dep as
+  R-replace / R-bypass / K-cruby / K-pure / K-native-perf. Net finding:
+  the bundle has exactly two non-default-gem native extensions (puma,
+  nio4r), both fall out with sinatra → axum. Full table:
+  [`PANGEA-COMPILER-CDEP-AUDIT.md`](./PANGEA-COMPILER-CDEP-AUDIT.md).
+  Spike result on Artichoke: archived 2025-11-03 — pivoted to magnus
+  (active CRuby FFI). Hollow-out plan structure unchanged; only the
+  embed crate substitutes.
 - **M8.2**: Move HTTP routing from sinatra/puma to axum endpoints
   in pangea-operator. Compiler RPCs (`/compile`, `/v1/architectures`,
   `/v1/architectures/smoke-test`) become axum handlers that internally
@@ -299,9 +304,9 @@ deliver while a Ruby image was in the path.
 
 | Risk | Mitigation |
 |---|---|
-| Artichoke metaprogramming gaps (AbstractSynthesizer's `method_missing` + `bury`) | M8.0 spike: implement a 30-line Pangea DSL fixture against latest Artichoke; if it fails, document specific gaps + decide between (a) submitting upstream PRs, (b) staying on rb-sys/magnus + CRuby, or (c) accelerating M2 (tatara-lisp port). |
-| C extension we missed | M8.1 audit forces the issue up front; CI gate refuses to publish operator builds where Artichoke fails to evaluate any architecture's smoke fixture. |
-| Performance regression vs MRI | Pangea evaluation is per-CR + cached; throughput isn't the bottleneck. Compile latency for cold-start template equally bounded by clone time, not eval time. |
+| ~~Artichoke metaprogramming gaps~~ — Artichoke archived 2025-11-03 | RESOLVED: pivoted to magnus + embedded CRuby. dry-struct + terraform-synthesizer run unmodified against real CRuby; no compatibility surface to validate. |
+| C extension we missed | M8.1 audit ([`PANGEA-COMPILER-CDEP-AUDIT.md`](./PANGEA-COMPILER-CDEP-AUDIT.md)) tabulated every dep; bundle has zero non-default-gem natives after sinatra/puma/json removal. CI gate refuses to publish operator builds where the magnus embed fails any smoke fixture. |
+| Performance regression vs sidecar MRI | Pangea evaluation is per-CR + cached; throughput isn't the bottleneck. Magnus calls real CRuby — same eval cost as today. Compile latency for cold-start template is bounded by gem-clone time, not eval time. |
 | Loss of CRuby debugging tools | Compiler sidecar can stay alongside Artichoke during the cutover as a fallback; deprecate only after M8.4 has hit a green-build week on rio. |
 
 **This is the recommended next major after M2–M7 land.** Aggregates
