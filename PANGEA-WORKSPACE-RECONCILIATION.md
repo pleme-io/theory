@@ -284,11 +284,23 @@ glue, not the DSL itself:
   prepend handled in Rust before invoking Artichoke. Each `ArchitectureGem`
   CR's clone is cached in a workspace dir keyed on `{gemName, version}`;
   only invalidated on gemRef change.
-- **M8.5**: Delete the compiler sidecar from the helm chart values.
-  Operator pod becomes single-container. `pangea-compiler` container
-  image is archived. End state: pangea-operator is a single Rust
-  binary that evaluates Pangea DSL in-process via Artichoke against
-  per-CR-cloned gems.
+- **M8.5.0** ✅ (helmworks@494533b, chart 0.7.0): `useEmbeddedRuby`
+  flag added. Default false (HTTP sidecar unchanged). When true: drops
+  the compiler sidecar from the pod spec, sets
+  `PANGEA_COMPILER_BACKEND=embedded` + `PANGEA_GEM_CACHE_DIR` env vars
+  on the operator container, mounts an emptyDir gem cache at
+  `/var/pangea/gems`. helm template + lint clean both modes.
+- **M8.5.1** (open): build + publish operator container image with
+  `--features embedded_ruby` (ghcr.io/pleme-io/pangea-operator:<sha>-embedded).
+  Requires operator flake to include `pkgs.ruby_3_4` in the runtime
+  closure.
+- **M8.5.2** (open): flip `useEmbeddedRuby=true` on rio, observe
+  saguão DNS reconciles end-to-end via the embedded path. Once stable
+  for one week, mark the HTTP path deprecated.
+- **M8.5.3** (open): delete the compiler sidecar from chart values
+  entirely; archive `pangea-compiler` container image. End state:
+  pangea-operator is a single Rust binary that evaluates Pangea DSL
+  in-process via embedded CRuby against per-CR-cloned gems.
 
 **Why this matters:**
 
