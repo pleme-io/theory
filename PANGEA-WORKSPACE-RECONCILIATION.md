@@ -479,6 +479,9 @@ To resolve before M1 lands:
 
 - [`THEORY.md`](./THEORY.md) — frame for typed substrate engineering.
 - [`CONSTRUCTIVE-SUBSTRATE-ENGINEERING.md`](./CONSTRUCTIVE-SUBSTRATE-ENGINEERING.md) — the canonical essay this design implements.
+- [`TERRENO.md`](./TERRENO.md) — Track B. The caixa-ecosystem-native
+  sibling. Both tracks register `ArchitectureGem` CRs; the operator
+  dispatches via `spec.source.kind`. Parallel, never replacement.
 - [`SAGUAO.md`](./SAGUAO.md) — the use case driving M1.
 - [`SAGUAO-MIGRATION.md`](./SAGUAO-MIGRATION.md) — saguão Phase 1+ rollout, of which this operator hardening is the load-bearing substrate fix.
 - [`META-FRAMEWORK.md`](./META-FRAMEWORK.md) — the four-layer compute hierarchy this operator instantiates.
