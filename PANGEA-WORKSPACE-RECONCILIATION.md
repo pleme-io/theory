@@ -262,6 +262,97 @@ InfrastructureTemplate and it's admitted, the operator will reconcile
 it (modulo environmental failures). No more "stuck in Compiling" for
 substrate-internal reasons.*
 
+## ★ Canonical contracts (ruthless standardization)
+
+Per the user directive (2026-04-30): every architecture gem and every
+workspace conforms to ONE typed contract. CI-gated, not optional.
+
+### ArchitectureGemContract — what every `pangea-*` gem MUST ship
+
+```
+pangea-<name>/
+├── pangea-<name>.gemspec        # standard rubygems metadata
+├── lib/
+│   └── pangea/
+│       ├── architectures/       # IFF this gem defines architectures
+│       │   └── <name>.rb        # one file per architecture
+│       └── resources/           # IFF this gem defines primitive resources
+│           └── <provider>.rb
+├── spec/
+│   ├── architectures/<name>_spec.rb         # RSpec coverage REQUIRED
+│   └── fixtures/<name>.yaml                 # smoke fixture REQUIRED
+└── pangea-gem.yaml              # the contract declaration (NEW; M7)
+```
+
+`pangea-gem.yaml` declares:
+
+- `gem_name` + `version`
+- For each architecture / resource: `class_name`, `fixture_path`,
+  `emit_resource_types` (list of TF resource types it generates),
+  `default_policy` (destroyProtection, driftReaction).
+- Required Ruby gem dependencies (already in gemspec, mirrored here
+  so the operator can verify without parsing Ruby).
+
+CI gates (operator-side):
+
+- `nix run pleme-io/pangea-operator#verify-gem -- <gem>` runs every
+  fixture against the operator's compiler image and validates
+  `pangea-gem.yaml` matches reality. Operator builds refuse to
+  publish if any gem in the bundle fails this gate.
+- `cargo test pangea_arch_loader::contract_tests` round-trips every
+  gem's `pangea-gem.yaml` into the typed `ArchitectureGemContract`
+  Rust struct.
+
+### WorkspaceContract — what every workspace tree MUST ship
+
+```
+<workspace>/
+├── account.yaml              # cloud account + credentials slot
+├── workspace.yaml            # NEW: typed contract declaration
+├── domains/                  # OR: clusters/, accounts/, fleet/ — per-shape
+│   └── <name>.yaml           # per-domain config (loaded by templates)
+├── <name>.rb                 # one Ruby template wrapper per "thing"
+└── Gemfile                   # required architecture gems
+```
+
+`workspace.yaml` declares:
+
+- `name`
+- `required_gems` (with version constraints)
+- `templates` — one entry per `.rb` file with: `name`, `path`,
+  `architecture_classes` (which Pangea::Architectures::* it calls).
+- `policy` (workspace-level cascade).
+
+The operator's `WorkspaceCatalog` CR points at a workspace, the
+operator parses `workspace.yaml`, and refuses to admit any
+InfrastructureTemplate whose architecture isn't in the workspace's
+declared list.
+
+### Reconciler protocol — the ONE state machine
+
+Implementation lives in pangea-operator (Rust). All five stages
+have typed inputs/outputs in Rust; transitions are auditable.
+
+| Stage | Input | Action | Typed output |
+|---|---|---|---|
+| Discover | ArchitectureGem CR set | RPC compiler `/v1/architectures` per gem | typed registry: `Map<gem, Vec<ClassSchema>>` |
+| Verify | typed registry + WorkspaceContract | run every fixture; type-check spec values; refuse if any unknown class | `Verified` typed witness, attached to InfrastructureTemplate status |
+| Plan | Verified template | clone workspace; compile via existing /compile RPC; tofu plan | terraform plan JSON, typed |
+| Apply | plan + cascaded policy | tofu apply (or stall on requireApproval) | applied state, typed |
+| Drift-watch | reconcileInterval timer | tofu plan; diff against last apply | `Drifted` or `Settled`, typed; reaction per cascade |
+
+### Adopt-once, compose-many
+
+Once these contracts land, ANY operator that consumes a pangea
+architecture gem (kenshi for ephemeral testing, shinka for
+migrations, future operators built on these primitives) inherits the
+same contract via the typed `ArchitectureGemContract` Rust struct.
+Same loader. Same smoke gate. Same reconciliation guarantees. The
+substrate compounds: adding a new architecture to ANY gem becomes a
+five-file change (Ruby class + RSpec + YAML fixture + gem.yaml entry
++ ArchitectureGem CR), and every consumer benefits without knowing
+the new architecture exists.
+
 ## ★ Open questions
 
 To resolve before M1 lands:
