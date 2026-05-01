@@ -229,6 +229,86 @@ None replace Ruby Pangea — every addition wraps or hardens it.
 - Each gem's CI gate proves its `ArchitectureGem` CR set ships with valid fixtures and clean smoke-tests.
 - Fleet-wide guarantee: every operator deployment reconciles only architectures it has provably loaded.
 
+### M8 — Hollow-out + embed Artichoke (eliminate the compiler sidecar)
+
+The motivation arrived during M1: bundling `pangea-architectures`
+into the compiler image required regenerating Gemfile.lock +
+gemset.nix in lockstep with every gem change, then rebuilding +
+publishing the compiler image, then bumping the rio HelmRelease.
+**Adding a gem became a five-step image-rebuild loop.** That
+contradicts "operator UNDERSTANDS gems as runtime artifacts" — the
+M1 design intent.
+
+The fix is structural, not workflow: hollow out the Ruby compiler so
+its only job is *evaluating the Pangea DSL*. Everything else moves
+to Rust. Once Ruby's surface is reduced to "pure-Ruby DSL evaluator
+with no I/O", Artichoke (embedded Ruby in Rust) becomes a viable
+runtime — and the compiler sidecar disappears entirely.
+
+**The C-dep audit:**
+
+Pangea's Ruby is **mostly pure Ruby**. C extensions live in I/O
+glue, not the DSL itself:
+
+| Component | Status | Migration |
+|---|---|---|
+| pangea-core, terraform-synthesizer, dry-struct, all pangea-* | pure Ruby | keep as-is |
+| sinatra | pure Ruby (pulls puma) | replaced by axum already in pangea-operator |
+| puma | C ext for performance | replaced by axum |
+| json (Ruby) | C-accelerated parser | serde_json (Rust side) |
+| psych (YAML) | libyaml C ext | serde_yaml (Rust side) |
+| bundler | mostly pure with some C edges | replaced by typed `Gem` Rust struct + `git clone` per CR |
+
+**The migration shape (M8.1 → M8.5):**
+
+- **M8.1**: Audit + tabulate every C extension currently in
+  pangea-compiler's bundle. Output: `theory/PANGEA-COMPILER-CDEP-AUDIT.md`
+  with one row per dep, "removable / replaceable / blocked" status.
+- **M8.2**: Move HTTP routing from sinatra/puma to axum endpoints
+  in pangea-operator. Compiler RPCs (`/compile`, `/v1/architectures`,
+  `/v1/architectures/smoke-test`) become axum handlers that internally
+  call into the embedded Ruby evaluator. Sinatra/puma deleted from
+  the bundle.
+- **M8.3**: Move JSON + YAML parsing to Rust. Operator parses request
+  bodies via serde, hands Ruby a typed Hash; Ruby returns a Hash;
+  operator serializes via serde back to the wire. Pangea Ruby stops
+  importing `json` and `yaml`/`psych`. Bundle shrinks again.
+- **M8.4**: Embed Artichoke. Operator's evaluator module is a Rust
+  function `eval_pangea(input: Hash, source: &str) -> Hash` backed
+  by an Artichoke interpreter. Per-CR `git clone` + `$LOAD_PATH`
+  prepend handled in Rust before invoking Artichoke. Each `ArchitectureGem`
+  CR's clone is cached in a workspace dir keyed on `{gemName, version}`;
+  only invalidated on gemRef change.
+- **M8.5**: Delete the compiler sidecar from the helm chart values.
+  Operator pod becomes single-container. `pangea-compiler` container
+  image is archived. End state: pangea-operator is a single Rust
+  binary that evaluates Pangea DSL in-process via Artichoke against
+  per-CR-cloned gems.
+
+**Why this matters:**
+
+Adding a new architecture gem to the fleet becomes a one-line
+ArchitectureGem CR — the operator clones the gem at the requested
+ref, smoke-tests every fixture, registers the typed namespace, no
+image rebuilds anywhere in the loop. Workspace SDLC iteration on
+gem code happens at git-push speed, not image-publish speed. This
+is the substrate guarantee the M1 design promised but couldn't fully
+deliver while a Ruby image was in the path.
+
+**Risks + mitigations:**
+
+| Risk | Mitigation |
+|---|---|
+| Artichoke metaprogramming gaps (AbstractSynthesizer's `method_missing` + `bury`) | M8.0 spike: implement a 30-line Pangea DSL fixture against latest Artichoke; if it fails, document specific gaps + decide between (a) submitting upstream PRs, (b) staying on rb-sys/magnus + CRuby, or (c) accelerating M2 (tatara-lisp port). |
+| C extension we missed | M8.1 audit forces the issue up front; CI gate refuses to publish operator builds where Artichoke fails to evaluate any architecture's smoke fixture. |
+| Performance regression vs MRI | Pangea evaluation is per-CR + cached; throughput isn't the bottleneck. Compile latency for cold-start template equally bounded by clone time, not eval time. |
+| Loss of CRuby debugging tools | Compiler sidecar can stay alongside Artichoke during the cutover as a fallback; deprecate only after M8.4 has hit a green-build week on rio. |
+
+**This is the recommended next major after M2–M7 land.** Aggregates
+to: pangea-operator becomes the single Rust binary that reconciles
+workspaces, loads architecture gems at runtime via Artichoke, and
+makes the rebuild-per-gem cycle structurally impossible.
+
 ## ★ Nix packaging — the bottom-line CI gate
 
 Operator + compiler sidecar + every architecture gem + WASM admission
