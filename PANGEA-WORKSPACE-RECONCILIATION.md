@@ -487,6 +487,101 @@ To resolve before M1 lands:
 - [`META-FRAMEWORK.md`](./META-FRAMEWORK.md) — the four-layer compute hierarchy this operator instantiates.
 - [`RUST-LISP-EMBEDDING.md`](./RUST-LISP-EMBEDDING.md) — the tatara-lisp embedding pattern M6 uses.
 
+## M8.5+ — landed primitives (post-rio rollout, 2026-05-02)
+
+Live in `pangea-operator@9704e39` / chart `0.7.8`. The operator's
+authoring surface is documented in
+[`pangea-operator/CLAUDE.md`](https://github.com/pleme-io/pangea-operator/blob/main/CLAUDE.md);
+practical recipes in
+[`pangea-operator/docs/AUTHORING.md`](https://github.com/pleme-io/pangea-operator/blob/main/docs/AUTHORING.md).
+The `pangea-operator-author` skill in `blackmatter-pleme` is the
+Claude entry point.
+
+### WorkspaceCatalog reconciler (M3)
+Cluster-scoped CR with its own controller. Populates
+`status.{templateCount, verified, conditions:[Reachable, GemsLoaded,
+Verified]}` based on (a) every `requiredGems` entry having
+`phase=Loaded` and (b) the count of `InfrastructureTemplate`
+instances labeled `pangea.pleme.io/workspace=<name>`. Same content-
+equality patch gating + condition-timestamp merging as
+`architecture_gem_controller` to avoid hot loops.
+
+### tofu import pre-apply path
+`InfrastructureTemplate.spec.importHints: BTreeMap<address, idTemplate>`
+with `{{ .var }}` substitution from `spec.variables`. Before each
+`tofu apply`, the operator runs `tofu import` for every drift entry
+with `action: create` whose address has a hint. Imported addresses
+thread through `CycleResult::AppliedSuccess.imported_addresses` →
+`Outcome::Imported` in the cycle receipt instead of `Outcome::Created`.
+
+### status.lastCycle typed receipts
+After every plan→apply pair (or every plan-with-no-changes), the
+operator writes a typed `ReconcileCycle` carrying:
+- `summary: CycleSummary { matched, updated, created, destroyed,
+  imported, driftedUncorrected, failed }`
+- `outcomes: [ResourceOutcome { address, outcome: Outcome, action,
+  message }]` (capped at 100; the rest roll up into `summary`)
+- `planSummary, sourceRevision, startedAt, completedAt, cycle`
+
+Surfaced via printer columns: `Cycle / Matched / Updated / Drifted /
+Healthy / Suspended` on `kubectl get infrastructuretemplate`.
+Receipts only patch when content changes — steady-state matched-only
+cycles don't churn etcd.
+
+### ReactivePolicy — declarative responses to bad states
+`ReactivePolicy` lives at every level of the cascade. Three
+escalation paths:
+- `failureEscalation` — fires when `status.failureCount >=
+  maxConsecutiveFailures` (default 5)
+- `phaseTimeout` — fires when `now - phaseEnteredAt > threshold` for
+  the current phase (defaults: Compiling 5m / Planning 10m / Applying
+  30m)
+- `verifiedBlocked` — fires when `Verified=False` persists past
+  timeout (default 10m)
+
+Three actions (worst-action-wins on multi-trigger:
+`Suspend > Page > Alert`):
+- `Alert` — Warning event + `Healthy=False` + ntfy at default
+  priority + structured log; reconcile loop continues
+- `Suspend` — set `status.autoSuspended=true`; halt reconcile until
+  manual clear (typed circuit breaker)
+- `Page` — ntfy at urgent priority + `Healthy=False`; no other state
+  change
+
+The cascade now has FOUR slots per level (`driftReaction`,
+`settlingPolicy`, `approvalRouting`, `reactive`); innermost-set wins
+per field; defaults fill any holes.
+
+New status fields on `InfrastructureTemplate`:
+`phaseEnteredAt`, `verifiedBlockedSince`, `autoSuspended`,
+`lastEscalatedAt`, `lastEscalationReason`, `conditions[Healthy]`.
+
+Reactive evaluation lives in `controller/reactive.rs`
+(`EffectiveReactivePolicy::resolve` + `evaluate`); applied at the
+end of `update_phase_with_error` with reason-based debounce so
+events + ntfy delivery fire ONCE per entry into the bad state, not
+every reconcile.
+
+### Routing-delivery layer
+`ApprovalRouting { ntfyTopic, slackChannel, githubIssueTemplate }`
+declares WHERE escalations go; `controller/routing.rs::RoutingClient`
+is the delivery wrapper.
+
+| Channel | Status |
+|---|---|
+| ntfy | **live** — POST to `{base}/{topic}` with `Title:` `Priority:` `Tags:` headers; base from `PANGEA_NTFY_BASE_URL` env (default `https://ntfy.sh`); priorities map from action (`Alert→default`, `Suspend→high`, `Page→urgent`) |
+| Slack | stub — logs warning when set; real delivery needs samba-pattern rate-limited consumer + webhook URL secret-resolution |
+| GitHub issue | stub — logs warning when set; real delivery needs gh app token + issue-template hydration |
+
+### Operational footnote — NixOS firewall RPF
+NixOS's strict reverse-path filter (`networking.firewall.checkReversePath
+= true` default) is incompatible with Cilium tunnel mode. The
+`nixos-fw-rpfilter` mangle PREROUTING chain silently drops cilium-
+routed pod traffic. Fix: `networking.firewall.checkReversePath =
+"loose";` in the cluster's NixOS config (committed as
+`nodes/rio/wireguard.nix@59069da` in the nix repo). This applies to
+every NixOS-hosted pleme-io cluster running pangea-operator.
+
 ## Maintained by
 
 `pleme-io/pangea-operator` repo + theory contributions. Update this
