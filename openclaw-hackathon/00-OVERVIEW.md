@@ -7,26 +7,53 @@
 
 ## Mission
 
-Demonstrate, end-to-end on `pleme-dev`, that the **tameshi pattern produces
-a provably-secure openclaw**. The demo's centerpiece is **cartorio's
-double-merkle-tree** as the operative proof primitive — every state
-transition appended to the event tree, every artifact bound into the
-state tree, both composed into the single ledger root that signs the
-posture of the whole substrate.
+Demonstrate, end-to-end on `pleme-dev`, that **the tameshi pattern can
+attest an entire environment as a single signed statement**.
+
+The demo's example is **openclaw**. Four kinds of artifacts come together
+into cartorio's double-merkle-tree, get signed, and produce one
+ledger-root claim over the whole running system:
+
+1. **The runtime — `OciImage` listings** for each openclaw component
+   (publisher-pki, skill-store, scanner). The bytes that execute.
+2. **The architecture — `HelmChart` listings** for each component's
+   chart. The composed shape: RBAC, network policies, env vars, resource
+   limits, service identities. Attesting the chart attests how the bytes
+   *run*.
+3. **The compliance proofs — `ComplianceRun` listings** for each pair
+   above: `fedramp_high_openclaw_image@2` against each image,
+   `fedramp_high_openclaw_helm_content@1` against each chart. Six runs,
+   each itself a typed leaf in the same state tree.
+4. **The graph — `cross_reference_edge` records** binding chart→image
+   (deploys), image→skill (embeds), chart→sibling (depends-on), each
+   component→its publisher enrollment. The edges are what turn a flat
+   set of leaves into a *system claim*.
+
+These don't sit beside each other in separate registries. They are *all
+leaves of the same merkle tree*, hashed with the same domain-separated
+math, signed by one publisher, and composed into **one `ledger_root`**.
+That hex string underwrites every claim above simultaneously, and any
+byte-level tampering anywhere in the graph deterministically produces a
+different root.
 
 **Thesis (the line every other doc serves):**
 
 > *Compliance becomes a theorem of the type system, not a claim in a
-> document. Tampering breaks a hash; admission gates fire by construction;
-> the operator never has to "trust" anything because every promise is
-> mechanically verifiable.*
+> document. The substrate makes a single signed statement about the
+> entire environment — runtime + architecture + tests + provenance —
+> and tampering with any component invalidates the root. Admission
+> gates fire by construction; the operator never has to "trust"
+> anything because every promise is mechanically verifiable.*
 
 **Demo lede:**
 
-> *If openclaw is running on `pleme-dev`, that is the proof. Every gate
-> in the chain — publisher enrollment, certification root, signature,
-> compliance pack reproducibility, framework coverage, ledger discipline —
-> fired and passed. Then the substrate keeps proving it: scanner
+> *If openclaw is running on `pleme-dev`, that is the proof. The merkle
+> tree has bound 6 listings (3 images + 3 charts) plus 6 compliance
+> runs plus the cross-reference graph plus the publisher enrollment
+> into one signed `ledger_root`. Every gate in the chain — publisher
+> identity, certification root, signature, compliance pack
+> reproducibility, framework coverage, ledger discipline — fired and
+> passed for every leaf. Then the substrate keeps proving it: scanner
 > re-attestation every 10 seconds, ledger root advancing on every
 > verified posture tick. Compliance is no longer an audit you survive
 > once a year; it is a continuous mechanically-verifiable property of
@@ -66,46 +93,90 @@ The 5-min slot means the substrate must answer **"what's the most
 visceral 30-second wow?"** — and have everything else *available* if
 the operator wants to extend in Q&A.
 
+## What the merkle tree binds (the openclaw example, concretely)
+
+Per the Mission, when openclaw is admitted into cartorio, the state tree
+holds — *simultaneously, under one `ledger_root`* — the following
+13 leaves plus their cross-reference graph:
+
+| Kind | Leaf | What it attests |
+|---|---|---|
+| `OciImage` | `pleme-io/openclaw-publisher-pki@0.1.0` | the publisher-pki binary |
+| `OciImage` | `pleme-io/openclaw-skill-store@0.1.0` | the skill-store binary |
+| `OciImage` | `pleme-io/openclaw-scanner@0.1.0` | the scanner binary |
+| `HelmChart` | `pleme-io/charts/openclaw-publisher-pki@0.1.0` | how publisher-pki deploys (RBAC, ports, env, NetworkPolicy, PSS) |
+| `HelmChart` | `pleme-io/charts/openclaw-skill-store@0.1.0` | how skill-store deploys |
+| `HelmChart` | `pleme-io/charts/openclaw-scanner@0.1.0` | how scanner deploys |
+| `ComplianceRun` | `fedramp_high_openclaw_image@2 / openclaw-publisher-pki@0.1.0` | publisher-pki image passes FedRAMP-High image pack |
+| `ComplianceRun` | `fedramp_high_openclaw_image@2 / openclaw-skill-store@0.1.0` | skill-store image passes |
+| `ComplianceRun` | `fedramp_high_openclaw_image@2 / openclaw-scanner@0.1.0` | scanner image passes |
+| `ComplianceRun` | `fedramp_high_openclaw_helm_content@1 / charts/openclaw-publisher-pki@0.1.0` | publisher-pki chart passes FedRAMP-High helm pack |
+| `ComplianceRun` | `fedramp_high_openclaw_helm_content@1 / charts/openclaw-skill-store@0.1.0` | skill-store chart passes |
+| `ComplianceRun` | `fedramp_high_openclaw_helm_content@1 / charts/openclaw-scanner@0.1.0` | scanner chart passes |
+| `PublisherEnrollment` | `operator@pleme.io` | operator's cert chain to org-root, currently unrevoked |
+
+Plus cross-reference edges (each is a `cross_reference_edge` row,
+itself attested through the state tree's hashing math):
+
+| Edge | Asserts |
+|---|---|
+| `chart/openclaw-publisher-pki → image/openclaw-publisher-pki` | the chart deploys *this* image (digest-pinned) |
+| `chart/openclaw-skill-store → image/openclaw-skill-store` | same shape |
+| `chart/openclaw-scanner → image/openclaw-scanner` | same shape |
+| `chart/openclaw-skill-store → chart/openclaw-publisher-pki` | depends-on (skill-store calls into PKI for cert validation) |
+| `chart/openclaw-scanner → chart/openclaw-publisher-pki` | depends-on (scanner pulls CRL from PKI) |
+| `chart/openclaw-scanner → chart/openclaw-skill-store` | depends-on (scanner observes skill-store listings) |
+| each listing → `operator@pleme.io` | publisher relation |
+| each ComplianceRun → its tested artifact | tests relation |
+
+That's the *whole environment*, captured as one merkle structure. A
+single signed `ledger_root` underwrites all of it. **No separate
+compliance database. No separate provenance ledger. No
+"propagation step" from policy to enforcement. One tree, one root, one
+verifiable claim.**
+
 ## Core values to demonstrate
 
 Every demo asset (live API, UI, CLI, slide) must serve at least one of:
 
-1. **Mechanical compliance.** A `CompliantListing<K>` is constructible
-   only via `CompliantListingBuilder::finalize()`. Invariants are
-   checked at build-time; no public constructor exists. (See
-   `arch-synthesizer/src/compliant_store.rs:720`.)
+1. **Mechanical compliance — by construction.** A `CompliantListing<K>`
+   is constructible only via `CompliantListingBuilder::finalize()`.
+   Invariants are checked at build-time; no public constructor exists.
+   (`arch-synthesizer/src/compliant_store.rs:720`.)
 
-2. **Tamper-evidence by construction.** `CertificationArtifact` is a
+2. **Tamper-evidence — by construction.** `CertificationArtifact` is a
    3-leaf Merkle tree (artifact + control + intent → composed_root).
    Mutate one byte → root changes → signature fails → admission denied.
-   The audience sees `VerificationError::CertificationRoot` fire on a
+   `VerificationError::CertificationRoot` fires deterministically on a
    live tampered listing.
 
-3. **Cartorio double-merkle-tree.**
-   - **Event tree** — append-only log of every admission / revocation /
-     quarantine / re-attestation event.
-   - **State tree** — current attested state of every artifact, indexed
-     by listing id.
-   - **Ledger root** — Blake3 over (event_root, state_root). Single
-     signed handle that proves the entire substrate posture at a moment
-     in time. (`cartorio/src/api.rs:84-108`,
-     `cartorio/docs/ARCHITECTURE.md`.)
+3. **Joint claim under one root.** Cartorio's double-merkle-tree —
+   state tree (current posture, all kinds together) + event tree
+   (append-only history) → `ledger_root = blake3(state_root,
+   event_root)`. The 13 leaves + N cross-reference edges from the
+   openclaw example all live in this one structure. The signed root
+   IS the joint claim. (`cartorio/src/api.rs:84-108`.)
 
 4. **Continuous re-attestation.** `openclaw-scanner` re-hashes every
-   attested artifact on a configurable cadence and gates drift.
-   (`openclaw-scanner/src/daemon.rs`.)
+   Active artifact every 10 seconds (demo mode). Each successful tick
+   is itself an event in the event tree — the substrate's
+   *history-of-having-stayed-compliant* is itself attested. Every
+   advance of `ledger_root` carries the joint claim forward in time.
 
-5. **Admission control end-to-end.**
-   - `lacre` gates `PUT /v2/{name}/manifests/{ref}` on cartorio's
-     allow-decision (only Active artifacts admitted to the registry).
-   - `sekiban` ValidatingAdmissionWebhook gates Pod creation on
-     `sekiban.pleme.io/signature` annotation against a SignatureGate CRD.
-   The same proof gates push and run.
+5. **Admission control end-to-end — gated by the same root.**
+   - `tabeliao publish` cannot register a non-conforming listing
+     (the 6 admission gates).
+   - `lacre` cannot let a non-Active digest through registry push.
+   - `sekiban` cannot let a non-Active digest run as a Pod.
+   - `openclaw-scanner` cannot let drift persist past 10 seconds.
+   *Every gate consults the same `ledger_root`.* No "did the policy
+   propagate?" — the state tree IS the policy.
 
 6. **Formal proofs underwrite the substrate.** 30 Kani harnesses across
    9 files cover certification-root determinism, ledger tamper
    detection, listing-state safety, install-gate logic, cycle detection.
-   (`arch-synthesizer/proofs/kani/`.)
+   The two ledger-tamper proofs are the formal floor for the entire
+   joint-claim story. (`arch-synthesizer/proofs/kani/`.)
 
 ## In scope
 
