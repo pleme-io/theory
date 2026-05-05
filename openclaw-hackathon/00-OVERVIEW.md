@@ -21,6 +21,29 @@ posture of the whole substrate.
 > the operator never has to "trust" anything because every promise is
 > mechanically verifiable.*
 
+**Demo lede:**
+
+> *If openclaw is running on `pleme-dev`, that is the proof. Every gate
+> in the chain — publisher enrollment, certification root, signature,
+> compliance pack reproducibility, framework coverage, ledger discipline —
+> fired and passed. Then the substrate keeps proving it: scanner
+> re-attestation every 10 seconds, ledger root advancing on every
+> verified posture tick. Compliance is no longer an audit you survive
+> once a year; it is a continuous mechanically-verifiable property of
+> the running system.*
+
+**Regulatory framing for the audience:**
+
+Recent compliance regimes (EU AI Act, SEC cyber-disclosure rule, FedRAMP
+Rev 5 update, NIS2, DORA) all push toward continuous attestation rather
+than point-in-time audit. The substrate doesn't *implement* those
+regimes — it implements the underlying primitive (continuous,
+mechanically-verifiable, content-addressed compliance) that every
+modern regime is converging on. Pointing at any one regulation is less
+load-bearing than the pattern itself: a substrate that gates
+non-compliant changes *before* they deploy and continuously verifies
+the running posture.
+
 ## Audience
 
 - Akeyless engineering crowd + crypto/security people at the hackathon.
@@ -121,35 +144,52 @@ Every demo asset (live API, UI, CLI, slide) must serve at least one of:
 
 The demo lands if **every one of these is true at hackathon time**:
 
-1. `pleme-dev` is running tameshi/cartorio + openclaw triad with
-   FedRAMP-high overlays. Cluster comes up clean from cold sleep
-   in <10 minutes via the existing `nix run .#wake` flow.
+1. **Substrate is up.** `pleme-dev` is running cartorio + cartorio-web +
+   cartorio-postgres + sekiban + kensa with FedRAMP-high overlays.
+   Cluster comes up clean from cold sleep in <10 minutes via the
+   existing `nix run .#wake` flow.
 
-2. The operator can publish an artifact through `tabeliao` against
-   the live cluster, see it admitted to cartorio, and watch the
-   double-merkle-tree's ledger root advance — visible in the web UI
-   in <5 seconds.
+2. **Openclaw is the workload under attestation.** The openclaw triad
+   (`openclaw-publisher-pki`, `openclaw-skill-store`,
+   `openclaw-scanner`) is published into cartorio via `tabeliao` —
+   each image + chart attested through provas FedRAMP-High packs —
+   and only then deployed onto the cluster. **If openclaw is running,
+   every gate passed: that's success 1.** Untampered openclaw deploying
+   on cluster *is* the proof.
 
-3. The operator can mutate one byte of a published listing and
-   trigger a deterministic, named verification failure in <5 seconds.
-   The error path is observable in the web UI (highlighted offending
-   leaf) and in the cartorio audit log.
+3. **Continuous verification at 10-second cadence.** `openclaw-scanner`
+   re-hashes every Active artifact every 10 seconds (demo-mode
+   override; production default is 300s). The web UI shows the
+   heartbeat: each successful re-attestation is a visible event on
+   the timeline, the ledger root advancing in lockstep.
 
-4. `openclaw-scanner` is running continuously against the deployed
-   cartorio and produces a drift-detection event the operator can
-   surface live (e.g. by tampering with a cluster-side artifact).
+4. **Shift-left rejection is visible.** The operator can publish a
+   tampered openclaw artifact and trigger a deterministic, named
+   verification failure (`AdmissionError::CertificationRoot`) in <5
+   seconds. The web UI highlights the offending leaf; the artifact
+   never reaches the state tree; sekiban never sees an attestation
+   for it; **the bad change never deploys.** That's success 2.
 
-5. The web UI surfaces the **double-merkle-tree** structurally — not
-   as text. State tree on one side, event tree on the other, ledger
-   root joining them. New events animate. New artifacts animate.
-   Tamper events flash red.
+5. **Runtime drift is caught.** If a deployed openclaw artifact's
+   bytes drift on cluster, the scanner detects within 10 seconds,
+   posts a quarantine event, the web UI shows the artifact's card
+   flip green→orange, and the next sekiban admission for that digest
+   denies. That's the safety net.
 
-6. Every CLI invocation in the demo is captured in `07-DEMO-STORYBOARD.md`,
-   verified to work in dry-run, and rehearsable in <5 min total.
+6. **The double-merkle-tree is structurally visible.** The web UI
+   surfaces it not as text. State tree on one side (every openclaw
+   artifact, its compliance runs, its SBOM, the publisher
+   enrollment), event tree on the other (every admission, re-attest,
+   quarantine), ledger root joining them. New events animate. Tamper
+   events flash red. Cross-reference edges show the joint claim.
 
-7. The substrate is in a **known-clean state** before the talk —
-   pleme-dev has been brought up, exercised, and brought back down
-   at least once with the demo workflow, with all evidence captured.
+7. **The demo is rehearsable.** Every CLI invocation in the demo is
+   captured in `07-DEMO-STORYBOARD.md`, verified to work in dry-run,
+   and rehearsable in <5 min total.
+
+8. **The substrate is in a known-clean state before the talk.**
+   pleme-dev has been brought up, exercised, and brought back down at
+   least once with the demo workflow, with all evidence captured.
 
 ## Risks (overview only — see `09-RISK-REGISTER.md` for mitigations)
 
@@ -235,6 +275,18 @@ These are locked and won't be reopened unless the operator says otherwise:
   rejected at admission **(shift-left prevention is the headline)** and
   `openclaw-scanner` flagging cluster-side drift as the secondary path.
   The demo emphasizes prevention; runtime drift is the safety net.
+- **Workload under test:** **openclaw triad** (publisher-pki +
+  skill-store + scanner) — *not* hello-rio. The demo's success-criterion
+  is "openclaw deploys" because that means every gate passed.
+- **Scanner cadence:** 10 seconds in demo mode (vs production default
+  of 300s). Tight enough to be visibly demonstrative; tunable per
+  HelmRelease values.
+- **Sekiban gate scope:** label-based selector, not namespace-wide. Pods
+  carrying `attestation.pleme.io/required: "true"` are gated; cartorio
+  + cartorio-web + the supporting controllers don't carry the label
+  (they're the substrate, not the workload). Only openclaw triad
+  carries it. This avoids the bootstrap chicken-and-egg of "cartorio
+  needs to attest itself to deploy."
 
 ## Open questions for the operator
 

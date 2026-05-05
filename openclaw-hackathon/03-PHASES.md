@@ -860,9 +860,20 @@ Ingress TLS cert from selfsigned-issuer.
 ### E.3 — `openclaw-skill-store` HelmRelease
 
 *Files added:*
-- `k8s/clusters/pleme-dev/apps/openclaw/openclaw-skill-store-helmrelease.yaml`
+- `k8s/clusters/pleme-dev/apps/openclaw/openclaw-skill-store-helmrelease.yaml`,
+  with **every Pod label seekiban gates on**:
+  ```yaml
+  spec:
+    values:
+      podLabels:
+        attestation.pleme.io/required: "true"
+  ```
+  This is what makes openclaw the workload-under-test. Cartorio +
+  cartorio-web do NOT carry this label — they're the substrate.
 
-*Commands + Verify + Rollback:* analogous to E.1.
+*Commands + Verify + Rollback:* analogous to E.1, but **expect the pod
+to fail to start until F.1 publishes its attestation.** This is the
+test of the gate.
 
 ### E.4 — `openclaw-publisher-pki` HelmRelease
 
@@ -887,13 +898,16 @@ from inside the cluster returns ok. `/org-root` returns the signed root.
 
 *Rollback:* git revert.
 
-### E.5 — `openclaw-scanner` HelmRelease
+### E.5 — `openclaw-scanner` HelmRelease (10s cadence in demo mode)
 
 *Files added:*
 - `k8s/clusters/pleme-dev/apps/openclaw/openclaw-scanner-helmrelease.yaml`
+  with `.spec.values.config.scan_interval_secs: 10` (override from the
+  chart default of 300; values.yaml documents this is demo-mode).
 
 *Commands + Verify:* `kubectl logs -n pleme-attestation
-deploy/openclaw-scanner` shows scan ticks every 300s.
+deploy/openclaw-scanner` shows scan ticks every 10s; corresponding
+`Reattest` events appear on the cartorio event timeline.
 
 ### E.6 — sekiban + kensa overlay HelmReleases
 
@@ -948,53 +962,120 @@ PLATFORM=pleme nix run .../platform-k3s#sleep
 > Four named live tests against the deployed cluster. Each becomes a
 > beat in the demo storyboard.
 
-### F.1 — Smoke test (clean publish — the "happy path")
+### F.0 — Pre-publish: try to deploy openclaw without attestation
 
-*Why:* Validate the end-to-end pipeline produces a healthy ledger
-advance, visible in the UI.
+*Why:* Establish the gate. **Sekiban must refuse a Pod with the
+`attestation.pleme.io/required: "true"` label whose digest is not
+Active in cartorio.** If this step succeeds (i.e. the deploy goes
+through despite no attestation), the gate is misconfigured and
+nothing else in F is meaningful.
+
+*Setup:* The openclaw triad HelmReleases land in Phase E.3–E.5 with
+the `attestation.pleme.io/required: "true"` label on every Pod they
+create. Cartorio is empty of openclaw listings at this point.
+
+*Verify:*
+```
+KUBECONFIG=/tmp/pleme-dev-kubeconfig.yaml \
+  kubectl -n pleme-attestation get events --sort-by=.lastTimestamp | tail -20
+```
+- Sekiban admission webhook denies the Pod create with reason
+  `no Active attestation found in cartorio for digest <sha>`.
+- `kubectl -n pleme-attestation get pods` shows openclaw triad pods in
+  state `0/1 Pending` or `0/1 ImagePullBackOff` (lacre also denying).
+- The substrate is doing its job: the unattested workload doesn't run.
+
+*Rollback:* Not applicable; this is the expected pre-state.
+
+### F.1 — Publish openclaw triad attestations; watch them deploy
+
+*Why:* The headline of the demo. **If openclaw deploys, every gate in
+the chain fired and passed.** That's the proof.
 
 *Commands:*
 ```bash
 # operator's laptop:
 cd ~/code/github/pleme-io
-# generate a typed listing for hello-rio:
-nix run github:pleme-io/arch-synthesizer/skill-evidence#publish-skill -- \
-  --skill-dir arch-synthesizer/skill-evidence/tests/fixtures/hello-rio \
-  --signer-id alice@pleme.io \
-  --listing-version 1.0.0 \
-  --output /tmp/hello-rio-listing.json
 
-# admit to live cartorio:
-curl -k -XPOST https://openclaw.dev.use1.quero.lol/api/v1/artifacts \
+# enroll the operator-side publisher first (one-time):
+SEED_HEX="$(openssl rand -hex 32)"
+curl -k -XPOST https://pki.dev.use1.quero.lol/enroll \
   -H 'content-type: application/json' \
-  --data @/tmp/hello-rio-listing.json
+  -d "{\"publisher_id\":\"operator@pleme.io\",
+       \"public_key\":\"$(echo -n $SEED_HEX | xxd -r -p | base64)\",
+       \"org\":\"pleme-io\"}"
+
+# publish each openclaw component (image + chart). For each artifact:
+#   tabeliao publish --manifest <ociManifest>
+#                    --config <attestations.yaml that names
+#                              fedramp_high_openclaw_image@2
+#                              or fedramp_high_openclaw_helm_content@1>
+#                    --cartorio https://openclaw.dev.use1.quero.lol
+#                    --lacre   https://lacre.dev.use1.quero.lol  (optional)
+#                    --image   ghcr.io/pleme-io/openclaw-publisher-pki
+#                    --reference 0.1.0
+#                    --signing-key $SEED_HEX
+#                    --pack    fedramp_high_openclaw_image@2
+
+for component in openclaw-publisher-pki openclaw-skill-store openclaw-scanner; do
+  # publish the OciImage attestation
+  tabeliao publish \
+    --manifest    /path/to/${component}-manifest.json \
+    --cartorio    https://openclaw.dev.use1.quero.lol \
+    --image       ghcr.io/pleme-io/${component} \
+    --reference   0.1.0 \
+    --signing-key $SEED_HEX \
+    --pack        fedramp_high_openclaw_image@2
+
+  # publish the HelmChart attestation
+  tabeliao publish \
+    --manifest    /path/to/${component}-chart-manifest.json \
+    --cartorio    https://openclaw.dev.use1.quero.lol \
+    --image       oci://ghcr.io/pleme-io/charts/${component} \
+    --reference   0.1.0 \
+    --signing-key $SEED_HEX \
+    --pack        fedramp_high_openclaw_helm_content@1
+done
+
+# Now flux + sekiban see the listings and let the pods run.
 ```
 
 *Verify:*
-- Response 200, includes `listing_id` + new `ledger_root`.
-- `cartorio-verify proof alice@pleme.io/hello-rio@1.0.0
-  --against https://openclaw.dev.use1.quero.lol` emits ✓.
-- Browser at the dashboard URL: ledger banner advances within ~100ms,
-  new artifact card appears, new event animates onto the timeline.
+- Each `tabeliao publish` returns 200 with a fresh `ledger_root`.
+- Browser at the dashboard URL: 6 new artifact cards appear (3 images +
+  3 charts), 6 cross-reference edges materialize (chart→image deploys),
+  6 ComplianceRun cards appear (3 FedRAMP-image + 3 FedRAMP-helm), plus
+  the openclaw triad's pods now visibly deploy:
+  ```
+  kubectl -n pleme-attestation get pods -l app.kubernetes.io/component=openclaw
+  # → all Running within ~30s of the last attestation publish
+  ```
+- `cartorio-verify audit --pinned-root <root_before_demo>
+  --against https://openclaw.dev.use1.quero.lol` emits ✓ over all 12
+  artifacts (6 listings + 6 compliance-runs).
 
-*Rollback:* If the admit failed unexpectedly, inspect cartorio-backend
-logs for the gate that fired. Most likely root causes (in priority
-order):
-1. Migration didn't run (shinka init container; check status).
-2. Schema mismatch from a partial migration.
-3. Publisher not enrolled — Phase F is testing the substrate, but the
-   `alice@pleme.io` publisher must be pre-enrolled via
-   `openclaw-publisher-pki/enroll`.
+*Rollback:* If a publish fails, the gate that fired names the issue
+(see `01-FINDINGS` § 2.2 for the 6 gates). Common causes in priority
+order:
+1. Publisher not enrolled — re-run the `/enroll` step.
+2. Compliance pack hash mismatch — pack version drift between
+   tabeliao-side and cartorio-side; align provas versions.
+3. Missing migration — shinka init container; check status on
+   cartorio-backend deployment.
+4. NetworkPolicy blocking publisher → cartorio ingress — confirm
+   pleme-charts overlay rendered allow-publish rule.
 
-### F.2 — Tamper test (the headline — shift-left rejection)
+### F.2 — Tamper test — shift-left rejection (headline beat #2)
 
 *Why:* The substrate refuses tampered artifacts deterministically.
+Nothing about openclaw can be slipped past the gate.
 
 *Commands:*
 ```bash
-# mutate one byte in the artifact_hash:
+# Take the openclaw-publisher-pki image listing JSON we built in F.1,
+# mutate one byte of artifact_hash, try to admit:
 jq '.certification.artifact_hash = "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"' \
-  /tmp/hello-rio-listing.json > /tmp/tampered.json
+  /tmp/openclaw-publisher-pki-listing.json > /tmp/tampered.json
 curl -k -XPOST https://openclaw.dev.use1.quero.lol/api/v1/artifacts \
   -H 'content-type: application/json' \
   --data @/tmp/tampered.json
@@ -1004,44 +1085,92 @@ curl -k -XPOST https://openclaw.dev.use1.quero.lol/api/v1/artifacts \
 - Response is 422 with body containing
   `"error": "AdmissionError::CertificationRoot"` (or the equivalent
   named variant).
-- The body specifies `expected_root`, `recomputed_root`, and
+- Body specifies `expected_root`, `recomputed_root`, and
   `offending_leaf: "artifact_hash"`.
-- Browser at the dashboard URL: tamper-overlay flashes red on the
-  offending leaf in the cert tree; the listing is NOT inserted into
-  the state tree (no new card, no ledger advance).
-- `cartorio-verify root` shows `ledger_root` unchanged from before the
-  attempted tamper.
+- Browser dashboard: tamper-overlay flashes red on the offending leaf
+  in the cert tree; the listing does NOT enter the state tree (no new
+  card, no ledger advance).
+- `cartorio-verify root` shows `ledger_root` unchanged.
+- *Most importantly:* nothing in the cluster moves. The bad openclaw
+  never gets a pod. Audience sees: the substrate refused — not a
+  policy decision, not a runtime block, but a cryptographic
+  impossibility. *That bad version of openclaw cannot run.*
 
 *Rollback:* No state to roll back; the substrate refused the write.
 
-### F.3 — Drift test (runtime safety net)
+### F.3 — Continuous verification (10-second cadence — the safety net)
 
-*Why:* If something Active drifts cluster-side, the scanner detects.
+*Why:* Once openclaw is running, the substrate keeps proving it stays
+compliant. Every 10 seconds the scanner re-hashes; every successful
+tick is an event the operator can point at as "the substrate is
+asserting *right now* that openclaw is unchanged from what was
+attested." If something drifts, the scanner catches it within 10
+seconds and quarantines.
 
-*Commands:*
-```bash
-# pick an Active artifact; mutate cluster-side state to simulate drift.
-# Concrete: kubectl exec into cartorio-backend, edit the row in postgres
-# directly to break artifact_hash from what was admitted.
+*Setup:* `openclaw-scanner` HelmRelease values include
+`scan_interval_secs: 10` (overridden from the production default of
+300s for demo-mode visibility — see § E.5 / `02-ARCHITECTURE` § 5.4).
+
+*Commands (continuous tick — no operator action needed):*
+```
+# nothing to run; the scanner ticks autonomously every 10s.
+# operator can show the heartbeat in the dashboard:
+KUBECONFIG=/tmp/pleme-dev-kubeconfig.yaml kubectl -n pleme-attestation \
+  logs deploy/openclaw-scanner --tail=30 -f
+# every 10s, lines emit: "tick: re-attested 6 artifacts; ledger_root <hex>"
+```
+
+*Verify (continuous):*
+- Browser dashboard shows a `Reattest` event animating onto the timeline
+  every 10 seconds; ledger root banner advances on each tick (it's
+  expected to advance — every successful re-attestation is itself an
+  event in the event tree, by design, so the substrate's
+  history-of-having-stayed-compliant is itself attested).
+- `cartorio_admissions_total{status="ok",kind="reattest"}` Prometheus
+  counter incrementing.
+
+*Commands (drift simulation — optional Q&A material):*
+```
+# Force a drift on one artifact:
 KUBECONFIG=/tmp/pleme-dev-kubeconfig.yaml kubectl -n pleme-attestation \
   exec -it deploy/cartorio-postgres-1 -- \
   psql -U cartorio -c "UPDATE certification_artifact \
-    SET artifact_hash = 'BROKEN' WHERE listing_id = 'alice@pleme.io/hello-rio@1.0.0';"
-
-# wait for next scanner tick (≤ 300s)
-KUBECONFIG=/tmp/pleme-dev-kubeconfig.yaml kubectl -n pleme-attestation \
-  logs deploy/openclaw-scanner --tail=20
-# look for "drift detected" line
+    SET artifact_hash = 'BROKEN' WHERE listing_id LIKE '%openclaw-skill-store%';"
+# next scanner tick (≤ 10s later) catches it.
 ```
 
-*Verify:*
-- Scanner logs show the drift detection.
-- `curl https://openclaw.dev.use1.quero.lol/api/v1/artifacts/alice@pleme.io/hello-rio@1.0.0`
-  shows the listing in `Quarantined` state.
-- Browser dashboard: the artifact's card flips green → orange; a new
-  `Quarantine` event appears on the timeline; ledger root advances.
+*Verify (drift):*
+- Scanner logs show "drift detected" within ≤ 10s.
+- `curl https://openclaw.dev.use1.quero.lol/api/v1/artifacts/<id>` shows
+  the listing in `Quarantined` state.
+- Dashboard: the artifact's card flips green → orange; new `Quarantine`
+  event animates onto timeline; ledger root advances.
+- *Crucial:* sekiban's next admission for that digest will *deny*. If
+  the openclaw-skill-store pod is restarted or rescheduled, it will fail
+  to come back up. **The substrate has propagated the verdict to the
+  runtime gate without any explicit propagation step.**
 
-*Rollback:* Reactivate via cartorio API after restoring the row.
+*Rollback:* Restore the row in postgres, then `POST /reactivate` (with
+operator + scanner cosignatures) to clear the Quarantined state.
+
+### F.3.1 — Demo framing for F.3
+
+The continuous-verification beat is the *response* to the framing in
+`00-OVERVIEW`'s **Regulatory framing**: every modern regime is
+converging on continuous attestation, and this is what continuous
+attestation looks like as a primitive. Three points to land for the
+audience:
+
+1. **Heartbeat is a signal.** The 10-second tick isn't "for the demo,
+   we tuned it." It's a knob — production can run hourly, dev can run
+   per-second. The substrate doesn't care; the proof structure is the
+   same.
+2. **Compliance is a property, not a snapshot.** Every successful tick
+   re-affirms; every failed tick quarantines. The audit handle
+   (`ledger_root@T`) is a *running* claim, not a ribbon-cut.
+3. **Drift propagates without policy push.** If a workload drifts, the
+   *next admission* for its digest denies, automatically. There is no
+   "rollout the policy update" step. The state tree is the policy.
 
 ### F.4 — Audit test
 
@@ -1083,22 +1212,27 @@ margin in the 5-min slot.
 ### G.2 — Resilience checks
 
 *Why:* Demo must survive the cluster being asleep at the start of the
-talk.
+talk; openclaw must come up freshly attested each rehearsal.
 
 *Commands:*
 ```bash
 # Right before the demo:
 PLATFORM=pleme nix run .../platform-k3s#wake
-# Verify all workloads Ready.
-# Run F.1, F.2, F.4 to "warm up" the merkle state with sample data.
-# DO NOT run F.3 (drift test takes 300s — use a shorter scan_interval
-# in demo mode if drift demo is included in the lightning slot).
+# Wipe prior demo state cleanly:
+KUBECONFIG=/tmp/pleme-dev-kubeconfig.yaml kubectl -n pleme-attestation \
+  delete pvc -l postgres.cnpg.io/cluster=cartorio-postgres
+# (cartorio-postgres re-bootstraps with empty schema; migrations re-apply.)
+# Then F.0 (verify pods can't start because attestations missing)
+# Then F.1 (operator publishes openclaw triad → pods come up)
+# Skip F.2 in rehearsals (deterministic; just verify it works once)
+# F.3's continuous tick is automatic; no manual setup
 ```
 
-*Verify:* Operator can rehearse the demo three times in a row without
-manual cleanup between runs (tampered artifacts don't pollute the state
-tree because they're rejected; clean publishes accumulate but the UI
-handles arbitrary ledger lengths fine).
+*Verify:* Operator can rehearse the demo cleanly each time:
+- Phase F.0 always shows the gate working.
+- Phase F.1 publishes openclaw fresh and watches it deploy.
+- F.3 ticks visibly during the rehearsal slot (10-second cadence makes
+  this near-immediate; not waiting 5 minutes).
 
 ### G.3 — Capture artifacts
 
