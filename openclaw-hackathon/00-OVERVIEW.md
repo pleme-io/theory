@@ -1,7 +1,9 @@
 # 00 — Overview
 
-> **Status:** draft for review. No code touched until 00–08 are signed off.
-> **Branch:** `openclaw-hackathon-plan` in `pleme-io/theory`.
+> **Status:** under review (00 first pass landed). No code touched until 00–08
+> are signed off.
+> **Repo:** `pleme-io/theory/openclaw-hackathon/` on `main` (no branches —
+> direct-to-main per operator preference).
 
 ## Mission
 
@@ -187,71 +189,63 @@ call to drop Akeyless from the demo means this file becomes the
 
 ## Decisions captured
 
-These are locked from the previous round of clarifying questions and
-won't be reopened unless the operator says otherwise:
+These are locked and won't be reopened unless the operator says otherwise:
 
 - **Hackathon date / timeline:** indefinite. Quality > speed.
 - **Demo slot:** 5-min lightning. Operator owns pacing.
-- **Demo runs from:** `pleme-dev` K3s cluster on
-  `akeyless-development` AWS.
+- **Demo runs from:** `pleme-dev` K3s cluster on `akeyless-development` AWS.
+  The `pleme-` prefix is a legacy artifact of the `PLATFORM=pleme` workspace
+  dimension; renaming infrastructure (ASG, SSM keys, env var, DNS) is
+  deferred. Docs use `pleme-dev` verbatim.
+- **Branch policy:** direct-to-main on every pleme-io repo touched. No
+  feature branches, no PRs.
 - **Relationship goal:** show the value of the tameshi pattern; no
   commercial pressure.
 - **Constraints:** none flagged.
-- **UI ambition:** lilitu-web stack (Leptos 0.7 + TailwindCSS +
-  pleme-mui). Full dashboard, not just an HTML page.
+- **UI ambition:** lilitu / lilitu-web stack patterns wholesale (Leptos 0.7
+  + TailwindCSS + pleme-mui frontend; SeaORM + Postgres backend; whatever
+  hosting/auth lilitu uses, we mirror). Full dashboard, not just an HTML
+  page.
 - **Akeyless component:** out. Pure merkle / attestation story.
-- **Cartorio double-merkle-tree:** in scope, fully realized + visualized.
+- **Cartorio double-merkle-tree:** in scope, **fully realized + visualized**
+  — including the three M0 additions:
+  - **Consistency-proof endpoint** (proves ledger root N+1 extends N).
+  - **Viz-friendly tree-fragment endpoint** (parents + siblings ready for
+    UI render, not raw inclusion paths).
+  - **`cartorio-verify` CLI** so the operator can run "audit the substrate"
+    against the live cluster from the laptop.
+- **Cluster namespace strategy:** `pleme-attestation` umbrella (matches
+  tameshi-watch overlay). plo's `sekiban-system` standalone PoC remains as
+  legacy; pleme-dev starts clean on the umbrella shape.
+- **Cartorio persistence:** Postgres + SeaORM, mirroring lilitu's backend
+  pattern (migrations, connection management, repository layer). Adopted
+  verbatim where applicable.
+- **Tamper-event sources:** both — `tabeliao publish` with mutated bytes
+  rejected at admission **(shift-left prevention is the headline)** and
+  `openclaw-scanner` flagging cluster-side drift as the secondary path.
+  The demo emphasizes prevention; runtime drift is the safety net.
 
 ## Open questions for the operator
 
-These need the operator's input before `01–07` can be written:
+The five M0 questions are resolved (see *Decisions captured*). The only
+remaining ambiguity is **UI hosting + auth specifics**, which the
+"use lilitu patterns wholesale" answer leaves implicit. The
+`01-FINDINGS.md` recon on lilitu's hosting + auth shape will resolve it
+explicitly; if lilitu does something we shouldn't mirror (e.g.
+production-only auth flow that doesn't apply to a synthetic demo), we
+flag it in `08-DECISION-LOG.md` and ask the operator before locking.
 
-1. **`pleme-dev` namespace strategy** — `pleme-attestation` umbrella
-   (matches tameshi-watch overlay) or `sekiban-system + openclaw-system`
-   split (matches plo's existing PoC)? We recommended `pleme-attestation`
-   in the prior round; confirm or override?
+Default assumption (subject to lilitu recon override):
 
-2. **Cartorio persistence on `pleme-dev`** — for the demo, cartorio
-   needs a backing store for the merkle ledger. Options:
-   - **(a)** SeaORM + PostgreSQL deployed alongside (full persistence).
-   - **(b)** SeaORM + SQLite on a PVC (simpler, single-node fine).
-   - **(c)** In-memory only (loses state on pod restart — fine for
-     demo if rehearsals seed fresh, scary if the demo box restarts
-     mid-talk).
-   Recommend **(b)** for M0. Confirm?
+- **WASM bundle hosting:** the same way lilitu hosts its frontend
+  bundle (Cloudflare Pages or whatever the lilitu stack uses).
+- **API exposure:** cartorio exposed via Ingress at a saguão-shaped
+  hostname (`openclaw.dev.use1.quero.cloud`) so the audience can
+  reach it from their devices, not only over Tailscale.
+- **UI auth:** open for the demo (all data synthetic; saguão SSO is
+  needless friction for a 5-min lightning slot). If lilitu's pattern
+  bakes auth into the frontend shell we may inherit it, but it stays
+  off the demo's critical path.
 
-3. **UI hosting** — three sub-choices:
-   - Where does the WASM bundle live? GitHub Pages off the openclaw
-     repo, Cloudflare Pages, or served by a small Axum on cluster?
-   - Does the UI talk to cartorio over public internet (cartorio
-     exposed via Ingress + saguão `<app>.<cluster>.<location>.quero.cloud`
-     hostname) or only over Tailscale (audience cannot interact, only
-     watch operator's screen)?
-   - Auth on the UI: open / cracha SSO (saguão pattern) / API key?
-   Recommend: GitHub Pages, public Ingress at
-   `openclaw.dev.use1.quero.cloud`, open auth (it's a demo, all data
-   is synthetic). Confirm?
-
-4. **Tamper-event source for the live demo** — easiest to script:
-   - **(a)** Operator runs a known-bad `tabeliao publish` with
-     mutated bytes; cartorio rejects on admit. Audience sees the
-     rejection.
-   - **(b)** Operator publishes a clean artifact, then we run a
-     surgical "evil twin" CLI that mutates the on-cluster state and
-     watches `openclaw-scanner` flag drift.
-   Recommend running both, with **(a)** as the headline. Confirm?
-
-5. **Scope of "double-merkle-tree fully built"** — cartorio already
-   exposes `state_root + event_root + ledger_root` + inclusion proofs
-   per artifact + per event. Three things might still be needed:
-   - **(i)** A consistency-proof endpoint (proving ledger root N+1
-     extends ledger root N — the standard Merkle log invariant).
-   - **(ii)** A web-UI-friendly endpoint that emits a ready-to-render
-     tree fragment (parents + siblings) for visualization, instead
-     of the operator hand-assembling them from raw inclusion paths.
-   - **(iii)** Verifier code paths exposed as a small CLI
-     (`cartorio-verify <listing-id>`) so the operator can run "audit
-     the substrate" against the live cluster from the laptop.
-   Recommend all three. Confirm or trim?
-
-Send answers to these five and `01-FINDINGS.md` follows immediately.
+If any of these defaults are wrong, flag them now so `01–02` reflect
+the right shape from the start.
