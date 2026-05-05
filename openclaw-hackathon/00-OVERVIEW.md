@@ -197,15 +197,26 @@ These are locked and won't be reopened unless the operator says otherwise:
   The `pleme-` prefix is a legacy artifact of the `PLATFORM=pleme` workspace
   dimension; renaming infrastructure (ASG, SSM keys, env var, DNS) is
   deferred. Docs use `pleme-dev` verbatim.
+- **Domain:** `quero.lol` (the `akeyless-development` AWS account hosts
+  this zone). `quero.cloud` is the operator's homelab fleet domain — out
+  of scope. Demo hostname: `openclaw.dev.use1.quero.lol`.
 - **Branch policy:** direct-to-main on every pleme-io repo touched. No
   feature branches, no PRs.
 - **Relationship goal:** show the value of the tameshi pattern; no
   commercial pressure.
 - **Constraints:** none flagged.
-- **UI ambition:** lilitu / lilitu-web stack patterns wholesale (Leptos 0.7
-  + TailwindCSS + pleme-mui frontend; SeaORM + Postgres backend; whatever
-  hosting/auth lilitu uses, we mirror). Full dashboard, not just an HTML
-  page.
+- **UI ambition:** lilitu / lilitu-web stack patterns wholesale.
+  - Frontend: Leptos 0.7 + TailwindCSS + pleme-mui (CSR WASM bundle).
+  - Backend: Axum + SeaORM + Postgres (cartorio mirrors lilitu's crate
+    layout where applicable).
+  - **Frontend bundling:** the WASM bundle is baked into a single
+    Docker image **alongside hanabi** (the BFF — GraphQL federation
+    gateway + WebSocket relay), with a hanabi configuration that
+    wires hanabi → cartorio + serves the frontend assets. **No
+    external static hosting.** One image, one HelmRelease, one
+    Ingress, all on the K3s cluster.
+  - Result: full dashboard, deployed as a normal cluster workload,
+    not an HTML-page workaround.
 - **Akeyless component:** out. Pure merkle / attestation story.
 - **Cartorio double-merkle-tree:** in scope, **fully realized + visualized**
   — including the three M0 additions:
@@ -227,25 +238,19 @@ These are locked and won't be reopened unless the operator says otherwise:
 
 ## Open questions for the operator
 
-The five M0 questions are resolved (see *Decisions captured*). The only
-remaining ambiguity is **UI hosting + auth specifics**, which the
-"use lilitu patterns wholesale" answer leaves implicit. The
-`01-FINDINGS.md` recon on lilitu's hosting + auth shape will resolve it
-explicitly; if lilitu does something we shouldn't mirror (e.g.
-production-only auth flow that doesn't apply to a synthetic demo), we
-flag it in `08-DECISION-LOG.md` and ask the operator before locking.
+All M0 design questions are resolved. The remaining items are
+implementation details the lilitu / hanabi recon (`01-FINDINGS.md`)
+fills in:
 
-Default assumption (subject to lilitu recon override):
+- **Hanabi auth posture for the demo** — hanabi is the BFF in
+  lilitu's pattern (GraphQL federation gateway + WebSocket relay).
+  Whatever auth posture hanabi runs in lilitu, we inherit. If it bakes
+  in auth that's needless friction for a 5-min lightning slot against
+  synthetic data, we flag it before adopting.
+- **Specific hanabi configuration shape for openclaw** — the lilitu
+  recon will surface hanabi's existing config schema; we author one
+  for openclaw that wires hanabi → cartorio (REST + GraphQL relay) →
+  Leptos frontend bundle.
 
-- **WASM bundle hosting:** the same way lilitu hosts its frontend
-  bundle (Cloudflare Pages or whatever the lilitu stack uses).
-- **API exposure:** cartorio exposed via Ingress at a saguão-shaped
-  hostname (`openclaw.dev.use1.quero.cloud`) so the audience can
-  reach it from their devices, not only over Tailscale.
-- **UI auth:** open for the demo (all data synthetic; saguão SSO is
-  needless friction for a 5-min lightning slot). If lilitu's pattern
-  bakes auth into the frontend shell we may inherit it, but it stays
-  off the demo's critical path.
-
-If any of these defaults are wrong, flag them now so `01–02` reflect
-the right shape from the start.
+If anything below is wrong, flag now so `01–02` reflect the right
+shape from the start.
