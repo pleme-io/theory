@@ -11,6 +11,47 @@
 
 ---
 
+## North Star — the destination
+
+The absolute-best long-term answer for SELinux on NixOS is **not**
+"hand-author policy modules until coverage is good enough." That
+contradicts BLACKMATTER pillar 12 (generation over composition) and
+caps at the bandwidth of human policy authors. The destination is:
+
+> Every NixOS system closure carries a **deterministically generated**,
+> **machine-checked**, **closure-content-addressed** SELinux policy
+> derived from typed `AccessProfile` declarations attached to every
+> service. The policy is bit-identical for identical inputs, recorded
+> in cartorio for fleet-wide attestation, and evolves through a typed
+> denial-driven feedback loop without operator intervention beyond
+> review.
+
+Nine architectural layers, in order of dependency:
+
+| # | Layer | What it gives us |
+|---|---|---|
+| 1 | **Typed `AccessProfile` primitive** in arch-synthesizer's typescape | Every service declares its access surface in typed form: binaries, file reads/writes, sockets, capabilities, child domains, MCS isolation needs. Authored as `(defaccessprofile :name … :reads … :writes … :binds …)`. The Rust compiler refuses incomplete declarations. |
+| 2 | **`selinux-render` deterministic renderer** | Takes `AccessProfile` + closure information. Emits **CIL (Common Intermediate Language)**, not legacy `.te` — CIL is the future of SELinux policy authoring, more expressive, faster to compile, and the upstream-recommended target. Same inputs → same `.cil` byte-for-byte. |
+| 3 | **Per-closure policy compilation** | Every NixOS system closure carries its own `.pp` baked at build time, derived from the closure's actual `/nix/store` paths. No activation-time `chcon` races. Policy regenerates exactly when the closure changes. |
+| 4 | **Closure-content-addressed labels** *(research path; needs upstream extension)* | Replace path-regex `file_contexts` with content-addressed labels keyed on binary hash. Eliminates the rename-breaks-policy problem entirely. Requires libselinux/kernel extension or a custom labeling backend; not currently possible upstream. Tracked as a long-horizon contribution. |
+| 5 | **Typed compliance proofs** | Every `AccessProfile` field carries machine-checkable compliance dimensions (`NIST_800_53(AC_3)`, `FedRAMP(SC_3)`, `PCI_DSS(R_7)`). The renderer emits a proof tree showing how the resulting policy satisfies each claimed control. Fed into cartorio as attestation evidence. |
+| 6 | **Cross-fleet attestation via cartorio** | Every host's loaded policy hash recorded in cartorio. "rio cluster, all nodes, policy revision X" becomes a queryable, attestable property. Drift detection automatic; admission gates can refuse a node whose loaded policy doesn't match its declared revision. |
+| 7 | **Denial-driven policy evolution loop** | AVCs flow Vector → VictoriaLogs → a typed analyzer that proposes `(defaccessprofile-amendment …)` updates. Operator reviews + accepts → typescape updates → new closure → new policy. Closes the audit2allow loop without human-in-the-loop pruning. |
+| 8 | **Broader LSM stacking** | Once `AccessProfile` is the typed primitive, Landlock and eBPF-LSM become additional render targets. Same typed input → multiple LSM enforcement. The substrate's `kernel-lsm.nix` builder already supports the kernel side. |
+| 9 | **Upstream contribution** | Submit `security.selinux.*` to nixpkgs with our renderer as the value-add. NixOS gets first-class SELinux. We become the maintainers of the canonical NixOS SELinux experience. |
+
+Layers 1–3 + 5–8 are concrete, achievable engineering work — extensions
+of existing pleme-io primitives (typescape, cartorio, Vector, the
+substrate's LSM kernel builder). Layer 4 is research. Layer 9 is
+political/social work that follows once 1–8 are stable.
+
+This document's earlier sections describe **Phase 1** — the foundation
+that makes the destination reachable. The phased roadmap (§"Phased path
+to the destination" below) maps every milestone, today's M0 through the
+final Layer-9 upstream merge.
+
+---
+
 ## The frame
 
 NixOS ships zero SELinux integration. Cause:
@@ -399,25 +440,324 @@ Tier-specific gates:
 
 ---
 
-## Promotion path into the fleet
+## Phased path to the destination
 
-1. **M0 — repo lands** (this PR). T1 substantive, T2-T4 stubbed. CI green.
-2. **M1 — rio adopts T1+T2 in permissive mode.** rio is the homelab
-   playground; perfect target for "logs everything, blocks nothing." Sets
-   up the audit-log-to-VictoriaLogs pipeline.
-3. **M2 — Tier 3 base policy.** systemd + sshd + nix-daemon + journald
-   covered. rio still in permissive mode but with policy loaded;
-   `audit2allow`-driven iteration.
-4. **M3 — Tier 3 podman policy + Tier 4.** Container labeling works
-   end-to-end. rio flips one container to enforcing mode as the canary.
-5. **M4 — rio in full enforcing mode.** Every service has a policy
-   module. AlertmanagerConfig rules block fleet-wide on AVC spikes.
+The work decomposes into **nine phases**. Each phase commits the
+substrate to the next; partial completion is acceptable, partial
+*direction* is not. M0–M6 (Phase 1) is "make the audit-mode foundation
+exist"; Phase 2 onward is "stop hand-authoring and start generating."
+
+### Phase 1 — Foundation (M0–M6)
+
+**Goal:** A NixOS host can run SELinux in enforcing mode for podman
+workloads with a hand-authored, container-selinux-derived policy.
+Everything in the M0 ship today + the M1–M6 milestones below. **This is
+groundwork, not the destination.**
+
+1. **M0 — repo lands.** T1 substantive, T2 substantive, T3 framework +
+   starter `.te` modules (nixos-base, nix-store, podman-host), T4
+   substantive. CI green on Darwin; Linux VM tests deferred.
+2. **M1 — rio adopts T1+T2 in permissive mode.** Wire AVC log → Vector
+   → VictoriaLogs via the existing observability stack.
+3. **M2 — Tier 3 base policy graduates.** systemd + sshd + nix-daemon
+   + journald + nginx covered. rio still permissive; policy loaded;
+   audit2allow-driven iteration.
+4. **M3 — Tier 3 podman policy graduates + Tier 4 lights up.** Container
+   labeling works end-to-end. `vm-selinux-podman-mcs` clears
+   `meta.broken`. rio flips one container to enforcing as the canary.
+   **The defense-in-depth gap closes here.**
+5. **M4 — rio in full enforcing mode.** Every running service on rio
+   has a graduated policy module. AlertmanagerConfig rules trigger on
+   AVC denial spikes.
 6. **M5 — Promote to akeyless-dev / openclaw clusters.** Compliance
-   theorems become derivable. Cartorio receipts include `selinux:enforcing`
-   posture as an attestable dimension.
+   theorems become derivable. Cartorio receipts include
+   `selinux:enforcing` posture as an attestable dimension.
 7. **M6 — `SecurityPosture` typescape primitive lands.** Cluster
    declarations carry their LSM choice in the type system. Mechanical
    propagation across the fleet.
+
+**At the end of Phase 1**, every pleme-io host can run enforcing-mode
+SELinux. Policy is still hand-authored. *audit2allow + hand-prune
+remains the bottleneck.* This is the pre-condition for Phase 2, not the
+end state.
+
+### Phase 2 — Typed `AccessProfile` primitive
+
+**Goal:** Every service declares its access surface as a typed value
+in arch-synthesizer's typescape.
+
+```rust
+// arch-synthesizer/src/access_profile.rs (new domain)
+#[derive(TataraDomain, Serialize, Deserialize, Debug, Clone)]
+#[tatara(keyword = "defaccessprofile")]
+pub struct AccessProfileSpec {
+    pub name: String,                            // canonical service name
+    pub binaries: Vec<BinaryDecl>,               // executables this service runs
+    pub reads: Vec<FileAccess>,                  // typed paths, not regex
+    pub writes: Vec<FileAccess>,
+    pub binds: Vec<SocketBind>,                  // ports / unix sockets
+    pub connects: Vec<SocketConnect>,            // upstreams
+    pub capabilities: Vec<Capability>,           // POSIX caps required
+    pub child_domains: Vec<ChildDomainDecl>,     // forked processes
+    pub mcs_isolation: Option<MCSPolicy>,        // for containers
+    pub compliance_claims: Vec<ComplianceClaim>, // typed framework refs
+}
+
+pub enum PathKind {
+    /// Resolved at render time against the consumer's actual closure.
+    /// `kind` selects which subdir of the resolved store path.
+    NixStorePackage { name: String, subkind: PackageKind },
+    Etc(String),
+    Var(String),
+    Run(String),
+    Home(String),
+    XdgRuntime(String),
+}
+
+pub enum PackageKind { Exec, Lib, Etc, Share, Doc }
+
+pub enum ComplianceClaim {
+    NIST_800_53(NistControl),    // typed enum, not string
+    FedRAMP(FedrampControl),
+    PCI_DSS(PciRequirement),
+    ISO_27001(IsoControl),
+}
+```
+
+Authored as `(defaccessprofile :name "podman-runtime" :reads […] :writes
+[…] :binds […] :compliance-claims […])`.
+
+**The Rust compiler refuses incomplete declarations.** A service can't
+ship without naming its access surface. Three things drop out:
+
+- The hand-author/audit2allow loop becomes optional, used only for
+  closing residual gaps, not as the primary authoring path.
+- New services are blocked at the type system from running without a
+  declared profile — drift is structurally impossible.
+- Services already running on the fleet get retro-engineered profiles
+  via `audit2allow` once + frozen as authored profiles thereafter.
+
+**Phase 2 graduation:** every service running on rio has a typed
+`AccessProfile`. The hand-authored `.te` files in
+`blackmatter-selinux/policy/modules/<service>/` are deprecated in
+favor of generated output.
+
+### Phase 3 — `selinux-render` deterministic renderer
+
+**Goal:** Take typed `AccessProfile` + closure → emit deterministic
+CIL (Common Intermediate Language) policy.
+
+```rust
+// new crate: pleme-io/selinux-render
+pub fn render(
+    profiles: &[AccessProfileSpec],
+    closure: &SystemClosure,           // resolved /nix/store paths
+    base_policy: BasePolicy,            // refpolicy core (mcs, init, kernel)
+) -> Result<RenderedPolicy, RenderError>;
+
+pub struct RenderedPolicy {
+    pub cil_modules: Vec<CilModule>,    // one per profile
+    pub file_contexts: FileContextsTable,
+    pub policy_pp: Vec<u8>,             // compiled binary policy
+    pub policy_hash: Blake3,            // for cartorio attestation
+    pub compliance_proofs: Vec<ComplianceProof>,
+}
+```
+
+**Why CIL, not legacy `.te`:**
+
+- CIL is the SELinux upstream's recommended target for new tooling
+  (`secilc` ships in `policycoreutils`). Better diagnostics, faster
+  compilation, more expressive (no `m4` macros).
+- Deterministic by construction — `.te` + `m4` introduces non-
+  deterministic ordering in some cases.
+- Direct support for namespaces, anonymous types, and constraints that
+  `.te` requires `.if` interfaces to express.
+
+**Why closure-aware at render time:** a profile says
+`NixStorePackage{name: "openssh", subkind: Exec}`; the renderer resolves
+that to the actual `/nix/store/qx81m2k7…-openssh-9.7p1/sbin/sshd` path
+in the consumer's specific closure. **The hash isn't a regex anymore —
+it's a content-addressed reference resolved deterministically.**
+
+**Phase 3 graduation:** rio runs an enforcing-mode policy compiled by
+`selinux-render` from the typescape, with zero hand-authored `.te`.
+The `policy_hash` is recorded in cartorio per node.
+
+### Phase 4 — Per-closure policy compilation
+
+**Goal:** Every NixOS system closure carries its own `.pp`, baked at
+build time, deterministic, attestable.
+
+```nix
+# In every NixOS system using blackmatter-selinux:
+system.selinuxPolicy = pkgs.callPackage selinux-render {
+  accessProfiles = lib.collectAccessProfiles config.services;
+  closure = config.system.path;
+  basePolicy = pkgs.selinux-base-policy-nixos;
+};
+
+system.selinuxPolicyHash = builtins.hashFile "blake3" config.system.selinuxPolicy.pp;
+```
+
+When the closure changes (package update), the policy regenerates
+exactly. No activation-time `chcon` race. Boot-time policy load uses
+the baked `.pp` directly. The `policy_hash` is part of the system
+closure and ships with the system.
+
+**Phase 4 graduation:** every host on the fleet has a deterministically-
+generated, closure-content-addressed policy. Policy drift between
+declared and loaded becomes a typed assertion that admission gates
+enforce.
+
+### Phase 5 — Typed compliance proofs
+
+**Goal:** Each `ComplianceClaim` on a profile produces machine-checkable
+evidence that the rendered policy satisfies the named control.
+
+```rust
+pub struct ComplianceProof {
+    pub claim: ComplianceClaim,                  // e.g. NIST_800_53(AC_3)
+    pub evidence_type: EvidenceType,
+    pub evidence: Evidence,
+}
+
+pub enum EvidenceType {
+    DomainSeparation,           // proves control via domain isolation
+    LeastPrivilege,             // proves via narrow allow-list
+    AuditableEvents,            // proves via audit rule presence
+    DataFlowConfinement,        // proves no flow from src→dst type
+}
+
+pub struct Evidence {
+    pub policy_module: String,
+    pub rules: Vec<RuleReference>,              // line refs in CIL
+    pub formal_check: Option<FormalCheck>,      // optional Z3/Coq proof
+}
+```
+
+Proofs feed into cartorio as attestation evidence. `(defcompliancepack
+:name "fedramp-high" :requires-claims [...])` declarations enumerate
+what proofs the operator promises; the renderer rejects incomplete
+proof coverage at type-check time.
+
+**Phase 5 graduation:** any cluster's compliance posture is a queryable
+property of its current closure. "openclaw cluster runs FedRAMP-High"
+becomes a machine-derivable theorem, not an audit assertion.
+
+### Phase 6 — Cross-fleet attestation via cartorio
+
+**Goal:** Every host's loaded policy hash recorded in cartorio. Drift
+detection automatic. Admission gates can refuse a node whose loaded
+policy doesn't match its declared revision.
+
+Mechanism: blackmatter-selinux's activation hook records the loaded
+policy's `blake3(pp)` to a cartorio `ArtifactState` keyed by
+`{cluster, hostname, generation}`. The sekiban admission webhook
+consults cartorio before scheduling pods on a node — if the node's
+recorded policy hash doesn't match the cluster's `SecurityPosture`
+declaration, scheduling refuses.
+
+**Phase 6 graduation:** "rio cluster, all nodes, policy revision X" is
+an attestable, transferable receipt. Drift between declared and loaded
+policy is impossible by construction.
+
+### Phase 7 — Denial-driven policy evolution
+
+**Goal:** Close the audit2allow loop without human-in-the-loop pruning.
+
+```
+AVC denial in /var/log/audit/audit.log
+    │
+    ▼
+Vector pipeline (existing)
+    │
+    ▼
+VictoriaLogs (existing)
+    │
+    ▼
+selinux-evolution analyzer (NEW — typed Rust controller)
+    │  • Classify denial: legitimate gap / latent bug / attack
+    │  • For legitimate gap: emit (defaccessprofile-amendment …) PR
+    │
+    ▼
+Operator review (must approve every PR)
+    │
+    ▼
+Typescape updates → new closure → new policy
+    │
+    ▼
+Cartorio records new policy hash → cycle closes
+```
+
+The analyzer NEVER auto-merges. The promise is "humans review PRs,
+not raw AVC denials" — the heavy lifting (denial → typed amendment) is
+mechanical. Operator confirms intent in PR review.
+
+**Phase 7 graduation:** rio's policy evolves through reviewed PRs only,
+zero hand-authored `.te` edits, zero direct `audit2allow` invocations.
+
+### Phase 8 — Broader LSM stacking
+
+**Goal:** Same `AccessProfile` → multiple LSM enforcement.
+
+The substrate's `kernel-lsm.nix` already supports multiple LSMs. Phase
+8 extends `selinux-render` siblings:
+
+- `landlock-render` — emits per-process Landlock rulesets
+- `ebpf-lsm-render` — emits eBPF programs for runtime enforcement
+
+A single `AccessProfile` now drives three enforcement mechanisms.
+SELinux is the kernel-wide MAC; Landlock is per-process self-restriction
+(useful for sandboxed workloads); eBPF-LSM is programmable runtime
+enforcement (useful for ad-hoc rules without policy reload).
+
+**Phase 8 graduation:** typed `AccessProfile` is the single source of
+truth for the access surface; LSM choice becomes a typed slot on each
+service (`:lsm Selinux | Landlock | EbpfLsm | Multi`).
+
+### Phase 9 — Upstream contribution
+
+**Goal:** `security.selinux.*` lands in nixpkgs upstream with our
+renderer as the value-add.
+
+Mechanics: incremental RFC, beginning with `security.selinux.enable` +
+the kernel build (Phase-1 work), followed by the renderer once it has
+two cluster-cycles of production validation. The deeper pieces
+(`AccessProfile` typescape, denial-driven evolution loop) stay in
+pleme-io as the value-add for the typed substrate; nixpkgs gets the
+common runtime + the option surface.
+
+**Phase 9 graduation:** running SELinux on stock NixOS becomes
+`security.selinux.enable = true;` for the kernel + userspace tier.
+pleme-io maintains the typed-policy generation layer that turns the
+stock surface into "every service has a generated policy."
+
+### Why this ordering, not "do them in parallel"
+
+Each phase produces evidence the next needs:
+
+- **P2 needs P1** because typed profiles are validated against real
+  enforcing-mode workloads. No production exercise = no signal that the
+  profile schema is right.
+- **P3 needs P2** because the renderer's input is typed profiles.
+  Building the renderer before the type exists is gold-plating.
+- **P4 needs P3** because per-closure compilation is meaningful only
+  when the renderer is deterministic.
+- **P5 needs P3** because compliance proofs are emitted by the renderer
+  alongside the CIL.
+- **P6 needs P4** because attestation needs deterministic, content-
+  addressed policy hashes.
+- **P7 needs P5–P6** because automated evolution must respect
+  compliance constraints + record updates in cartorio.
+- **P8 needs P3 + P7** because multi-LSM rendering reuses the typed-
+  input + denial-feedback infrastructure.
+- **P9 needs P1–P3** at minimum because upstream wants validated, well-
+  documented, simple entry points; the rest follows incrementally.
+
+**Skipping ahead breaks compounding.** Building the renderer (P3) on
+hand-authored profiles (no P2) produces a worse renderer because the
+profile schema lacks signal from real workloads.
 
 ---
 
