@@ -97,6 +97,7 @@ that closes each one:
 | 4 | Symlink attack on volumes | Successful — race between `chcon` and `open()` is unguarded | File-label check fires in the kernel on every `open()`; symlink to a file labeled with a different MCS category gets denied | M3 |
 | 5 | Process injection within host (same UID) | Possible — DAC permits same-UID `ptrace`, `kill`, `/proc/pid/mem` | SELinux domain separation denies cross-domain `ptrace`/`process_vm_*` regardless of UID | M3 |
 | 6 | Single-layer failure (namespace escape, capability bug, seccomp gap) | No fallback — that one failure is total | Other independent layers (LSM domain, MCS, file labels) still enforce | M3 |
+| 7 | **Secrets cross-pollination** — compromised container reads other containers' secrets | All containers running as the same unprivileged user can read each other's secret-mount sources if they live in a shared user-readable path; on stock NixOS a host-wide secret leak from one compromised container is the worst-case "nuke" | Per-secret SELinux types + per-container MCS pair: container only reads secrets explicitly granted to its `AccessProfile`; cross-container secret access denied at the LSM hook regardless of DAC + UID | M3 (per-secret types via T3 podman-host) + Phase 2 (typed `:secrets` slot in `AccessProfile`) |
 
 **Crucially for M0:** Tiers 1 + 2 alone (kernel + userspace in permissive
 mode) close **none** of these threats. Permissive mode logs every access
@@ -500,7 +501,26 @@ pub struct AccessProfileSpec {
     pub capabilities: Vec<Capability>,           // POSIX caps required
     pub child_domains: Vec<ChildDomainDecl>,     // forked processes
     pub mcs_isolation: Option<MCSPolicy>,        // for containers
+    pub secrets: Vec<SecretAccess>,              // typed per-secret access intent
     pub compliance_claims: Vec<ComplianceClaim>, // typed framework refs
+}
+
+/// Each declared secret gets its own SELinux type (`secret_<name>_t`)
+/// emitted by the renderer. The `mode` field controls how the secret
+/// reaches the consumer: bind-mounted file with the consumer's MCS
+/// pair, podman-secret native mount, systemd CredentialsDirectory=
+/// (the latter two delegate to systemd's own confinement). Default is
+/// `Bind` because it composes cleanly with `:Z`/`:z` volume semantics.
+pub struct SecretAccess {
+    pub name: String,                  // canonical secret identifier
+    pub source: SecretSource,          // SOPS reference, Akeyless ref, podman-secret name
+    pub mode: SecretMountMode,         // Bind | PodmanSecret | SystemdCredential
+    pub access: SecretAccessLevel,     // ReadOnce | ReadAlways
+}
+pub enum SecretSource {
+    Sops(String),                      // path under nix/secrets.yaml
+    Akeyless(String),                  // /pleme/<path>
+    PodmanSecret(String),              // podman secret name
 }
 
 pub enum PathKind {
@@ -732,6 +752,166 @@ common runtime + the option surface.
 `security.selinux.enable = true;` for the kernel + userspace tier.
 pleme-io maintains the typed-policy generation layer that turns the
 stock surface into "every service has a generated policy."
+
+### Secrets isolation under DAC+MAC composition
+
+The secrets-handling story is a first-class citizen of this design,
+not a footnote. The threat (table row #7): a single host runs many
+containers; if container A is compromised, can it read container B's
+secrets? On stock NixOS the answer is "yes, if A's user can traverse
+to B's mount source" — a single container compromise becomes a
+host-wide secret leak.
+
+The destination's answer composes three independent layers:
+
+1. **DAC** — secrets at rest are owned by `root` with mode `0400`.
+   The unprivileged user (UID 5000+) that runs podman cannot read
+   them. sops-nix already produces this shape; nothing changes here.
+
+2. **MAC type confinement** — every secret gets its own SELinux type
+   (`secret_<name>_t`) emitted by the renderer. Allow rules say
+   "container running with `AccessProfile.secrets` referencing
+   `<name>` may read `secret_<name>_t`; nothing else may." Other
+   containers fail at the LSM hook even if the file becomes readable
+   through a misconfigured `chmod`.
+
+3. **MCS category gating** — when a secret is bind-mounted into a
+   container with `:Z`, podman applies the container's MCS pair to
+   the secret file. Two containers running the same image, holding
+   the same secret type, with different MCS pairs, still can't read
+   each other's mounted copies.
+
+The three layers fail independently. Bypassing all three requires
+breaking podman's user-namespace isolation **and** finding a
+SELinux policy bug **and** finding an MCS constraint exception in
+the same exploit chain. Per the threat-model framing, single-layer
+failure goes from "host-wide secret leak" to "no observable damage."
+
+#### How secrets reach a container — three modes
+
+The `AccessProfile.secrets[].mode` slot picks one of three delivery
+mechanisms:
+
+| Mode | Mechanism | When to use |
+|---|---|---|
+| `Bind` (default) | Bind-mount `/run/secrets/<name>:/etc/<svc>/<file>:ro,Z` | Most common; composes cleanly with `:Z` semantics |
+| `PodmanSecret` | `podman secret create` + `--secret name,target=…` | When the secret rotates often; podman manages lifecycle |
+| `SystemdCredential` | `systemd-run … LoadCredential=…` (kernel keyring + sysctl gate) | When the secret should never touch a tmpfs path; available only to the launched process |
+
+For all three, the renderer emits the matching SELinux type rule.
+The operator never picks the type; the typed `:secrets` declaration
+derives it.
+
+#### Worked example — the `zot` registry and its LDAP bind credential
+
+```lisp
+(defcaixa :name "zot" :kind Servico
+  :runtime Podman
+  :user "1002:1002"
+  :no-new-privileges true
+  :volumes [
+    {:host "/var/lib/zot" :container "/data" :isolation Private}
+  ]
+  :access-profile {
+    :binds [{:port 5000 :proto Tcp}]
+    :secrets [
+      {:name "ldap-bind-password"
+       :source (Sops "zot/ldap-bind-password")
+       :mode Bind
+       :access ReadAlways
+       :container-path "/etc/zot/ldap-bind-password"}
+    ]
+    :compliance-claims [(NIST_800_53 :SC_28) (FedRAMP :SC_8)]
+  })
+```
+
+The `feira deploy` renderer produces:
+
+- **sops-nix declaration:** `/run/secrets/zot/ldap-bind-password` (mode 0400 root:root) — DAC layer.
+- **SELinux type:** `secret_zot_ldap_bind_password_t` defined in the
+  generated podman-host policy module — MAC layer.
+- **Allow rule:** `container_t` with role `system_r` and the zot
+  container's MCS pair may read `secret_zot_ldap_bind_password_t`;
+  no other policy module references this type.
+- **podman unit volume entry:** `/run/secrets/zot/ldap-bind-password:/etc/zot/ldap-bind-password:ro,Z`
+  — picks up MCS at runtime.
+- **Cartorio attestation:** the secret's `(name, type, container)` triple
+  recorded as evidence for `NIST 800-53 SC-28` and `FedRAMP SC-8`
+  (information at rest + transmission protection).
+
+Compromise scenarios after deployment:
+
+- **Compromised unprivileged user (UID 1002)**: reading `/run/secrets/zot/*`
+  fails at the DAC layer (file is `root:root 0400`).
+- **Compromised container A trying to read container B's secret**: the
+  SELinux type rule denies it (container A has no allow rule for
+  `secret_<other>_t`); even if the type matched, MCS categories
+  differ.
+- **Container breakout from A (UID 1002 namespace escape)**: only sees
+  `/run/secrets/zot/*`; same DAC + MAC + MCS chain still applies.
+- **Worst case across all three failures**: attacker has whatever was
+  IN the zot container — its own bind credential, nothing else.
+
+This is the "container breakout goes away, you're just worried about
+what this container has access to" model that FCOS / Rocky make
+implicit through their default SELinux policy. blackmatter-selinux
+makes it **explicit and typed**: the secret declaration is a
+machine-readable contract, the renderer enforces it, the attestation
+proves it.
+
+#### Phase-1 (M3+) translation — what works today
+
+Phase 2's typed `(defcaixa :secrets …)` form ships with the destination.
+Phase 1 has the same primitives, just authored by hand:
+
+```nix
+# /etc/nixos/configuration.nix
+sops.secrets."zot/ldap-bind-password" = {
+  mode = "0400";
+  owner = "root";
+  group = "root";
+};
+
+virtualisation.oci-containers.containers.zot = {
+  image = "ghcr.io/project-zot/zot:latest";
+  user = "1002:1002";
+  extraOptions = [ "--security-opt=no-new-privileges" ];
+  volumes = [
+    "/run/secrets/zot/ldap-bind-password:/etc/zot/ldap-bind-password:ro,Z"
+  ];
+};
+
+# Hand-authored policy module attaching secret_zot_ldap_t to the
+# secret path + an allow rule for the zot container's domain.
+blackmatter.components.selinux.policy.modules = [
+  "${inputs.blackmatter-selinux}/policy/modules/podman-host"
+  ./policy/modules/zot-secrets   # service-local module
+];
+```
+
+The hand-authored `policy/modules/zot-secrets/zot-secrets.te` lives in
+the consumer repo, not blackmatter-selinux — same per-service module
+pattern as `nixos-base` / `podman-host`. Phase 2 lifts it into the
+typescape automatically.
+
+#### Anti-patterns
+
+- **Secrets at `0644` "for convenience"** — defeats DAC layer entirely.
+  Even with SELinux MAC, reducing the layer count makes the threat
+  model weaker without operational benefit.
+- **Single secret file shared across containers** — even if SELinux
+  allows it, MCS denies it; either declare the secret per-container
+  or genuinely intend a shared `:z` (lowercase) lifecycle.
+- **Mounting `/run/secrets` itself into a container** — gives the
+  container visibility to every secret name (even if not readable).
+  Mount specific files only.
+- **Hand-authoring `chcon -t secret_*` outside the renderer** —
+  activation-time relabeling will overwrite it on next switch. Use
+  the typed `:secrets` declaration so labels are baked in.
+
+This is the secrets dimension of the destination. Full
+`AccessProfile` schema continues with file/socket/capability slots
+(see Phase 2 layer above).
 
 ### Why this ordering, not "do them in parallel"
 
