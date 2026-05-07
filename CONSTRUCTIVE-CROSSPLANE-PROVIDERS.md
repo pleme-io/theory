@@ -204,8 +204,12 @@ heterogeneous resource. Everything else is upstream-vendor onboarding.
 ## Status (2026-05-06)
 
 - **`pleme-io/crossplane-akeyless`** — 100% `go build ./...` clean,
-  119/119 controllers (111 with full body-construction, 8 stubs
-  pending M3.2 graduation).
+  **119/119 controllers with full body-construction (zero stubs)**.
+  The substrate's `ResourceShape` + `BodyTemplate` cover all six
+  heterogeneity classes the akeyless body types exhibit (default
+  string identifier, alt-field, per-method pointer/value, per-method
+  field-name, singleton NoIdentifier, int64-from-external-name,
+  composite SpecFields).
 - **`pleme-io/crossplane-datadog`** — substrate scaffold validated;
   per-resource controllers blocked on Datadog OpenAPI spec acquisition.
 - **`pleme-io/crossplane-splunk`** — substrate scaffold validated;
@@ -215,9 +219,12 @@ heterogeneous resource. Everything else is upstream-vendor onboarding.
 
 ## Outstanding substrate work
 
-- **M3.2** — Body-mapping graduation for the 8 stubbed akeyless
-  resources (per-resource SDK introspection); replaces the hardcoded
-  `ResourceShape` override map with OpenAPI-driven derivation.
+- **OpenAPI-driven `ResourceShape` derivation** — replaces the
+  hardcoded akeyless override map with body-shape introspection at
+  generation time. Reads each `[crud].schema` body from the OpenAPI
+  spec, derives the appropriate `BodyTemplate` automatically, and
+  surfaces the derived shape in a typed report so operators can
+  inspect what was inferred.
 - **OpenAPI introspection at generation time** — extends `iac-forge`
   to read the SDK body schema and derive `ResourceShape` automatically
   per `(resource, CRUD-method)` tuple.
