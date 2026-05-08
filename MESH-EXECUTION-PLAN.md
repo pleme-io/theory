@@ -14,11 +14,11 @@
 
 ## Milestone gates summary
 
-| Gate | What proves it | Dependencies |
-|---|---|---|
-| **M1.1** | Every cartorio/lacre/publisher-pki pod has `/run/spiffe.io/socket` mounted (SPIFFE Workload API socket reachable) | spire-server + spire-agent deployed; openclaw helmrelease patched |
-| **M1.2** | Rust crate `kakuin-workload-api` reads an SVID from a process running inside cartorio's pod | M1.1 |
-| **M1.3** | Two Rust demo Servicos handshake mTLS via SVIDs (no proxy yet, just direct rustls + workload API SVID source) | M1.2 |
+| Gate | What proves it | State | Dependencies |
+|---|---|---|---|
+| **M1.1** ✅ | Every cartorio/lacre/publisher-pki pod has `/run/spiffe.io/socket` mounted (SPIFFE Workload API socket reachable) | **shipped** — SPIRE on pleme-dev; cartorio pod registered with `spiffe://pleme.io/ns/openclaw/sa/openclaw-stack-cartorio`; SVID delivered via probe pod | spire-server + spire-agent deployed; openclaw helmrelease patched |
+| **M1.2** 🟡 | Rust crate `kakuin-workload-api` reads an SVID from a process running inside cartorio's pod | **library shipped** at `pleme-io/kakuin-workload-api`; live-pod integration test deferred to in-cluster CI | M1.1 |
+| **M1.3** | Two Rust demo Servicos handshake mTLS via SVIDs (no proxy yet, just direct rustls + workload API SVID source) | next | M1.2 |
 | **M2.1** | A new `pleme-io/proxy` Rust crate (vendoring `linkerd2-proxy` to start) builds + smoke-runs locally | independent of M1 |
 | **M2.2** | Sidecar injector caixa Servico — MutatingAdmissionWebhook adds proxy + iptables init-container to pods labeled `mesh.pleme.io/inject=true` | M2.1 |
 | **M2.3** | Cartorio + lacre auto-meshed; intercepted traffic round-trips with mTLS via SVIDs from M1 | M1.3 + M2.2 |
