@@ -48,6 +48,33 @@ on the prior:
 | 18 | [`SAGUAO.md`](./SAGUAO.md) | Fleet-wide identity + authz + self-service portal — passaporte, crachá, vigia, varanda. Canonical answer to "let my family sign in once and self-serve across every homelab." |
 | 19 | [`SAGUAO-MIGRATION.md`](./SAGUAO-MIGRATION.md) | The seven-phase staged-diff migration of the rio cluster from Cloudflare Access to saguão. Companion to SAGUAO.md; concrete file-level diffs with verification commands. Nothing applied yet. |
 
+### Generation 2 (typed-substrate self-improvement — typescape methodology + cache-fragmentation)
+
+The four documents added 2026-05-08 codify the **how-to-build-a-typescape**
+methodology and the **cache-fragmentation rule** that drives any
+"shared transitive dep" optimization (Nix flake.lock today, OCI / Helm /
+Terraform / Cargo / GHA / LLM-context tomorrow). Each typescape ships
+as a two-doc set: the typed primitive set + the verification pass that
+proves the typescape's invariants are compile-time enforced (not
+documented-only).
+
+| # | File | One-line summary |
+|---|---|---|
+| 20 | [`TYPESCAPE-METHODOLOGY.md`](./TYPESCAPE-METHODOLOGY.md) | The meta-typescape — verification methodology, 8-pattern catalog, substrate-side `tameshi::typed-primitive-audit` automation, the convergence loop applied to typescape authoring |
+| 21 | [`TYPESCAPE-METHODOLOGY-VERIFICATION.md`](./TYPESCAPE-METHODOLOGY-VERIFICATION.md) | The audit auditing itself — 8 ✅ / 0 ⚠️ / 0 ❌ across 8 typed surfaces, bounded recursion |
+| 22 | [`CASCADE-RULE.md`](./CASCADE-RULE.md) | The cache-fragmentation rule lifted to canonical theory: cost = `distinct_revs(T) × consumers(T)`. 8 typed primitives, 7 domains pleme-io operates on |
+| 23 | [`CASCADE-RULE-VERIFICATION.md`](./CASCADE-RULE-VERIFICATION.md) | 14 ✅ / 0 ⚠️ / 0 ❌ across 14 typed surfaces |
+| 24 | [`FLAKE-DEDUP.md`](./FLAKE-DEDUP.md) | The Nix-domain instance of CASCADE-RULE — first typescape to ship with verification companion + fully-proven status (13 ✅ / 0 ⚠️ / 0 ❌) |
+| 25 | [`FLAKE-DEDUP-VERIFICATION.md`](./FLAKE-DEDUP-VERIFICATION.md) | The originating verification doc — surfaced the patterns that became TYPESCAPE-METHODOLOGY's catalog |
+
+**Why these landed together:** the cardinal directive (path of least
+resistance is forbidden, see `pleme-io/CLAUDE.md` Operating Principle
+#0) demands fully-proven typescapes by construction. The two-doc
+shape (typed primitive set + verification pass) becomes canonical for
+any new pleme-io typescape. Every future typescape ships with
+`<DOMAIN>.md` + `<DOMAIN>-VERIFICATION.md`, and CI gates via
+`tameshi typed-primitive-audit` enforce no regression.
+
 ### Repo conventions
 
 | File | Purpose |
