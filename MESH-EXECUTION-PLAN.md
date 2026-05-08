@@ -21,7 +21,7 @@
 | **M1.3** 🟡 | Two Rust demo Servicos handshake mTLS via SVIDs (no proxy yet, just direct rustls + workload API SVID source) | **library shipped** at `pleme-io/kakuin-rustls`; live two-Servico handshake demo is the remaining gate | M1.2 |
 | **M2.1** 🟡 | A new `pleme-io/aresta` Rust crate builds inbound mTLS path on top of kakuin-workload-api + kakuin-rustls; vendoring linkerd2-proxy is deferred (kept simpler scope first) | **library shipped** at `pleme-io/aresta`; outbound + retries + CB queued for M2.3 | independent of M1 |
 | **M2.2** 🟡 | Sidecar injector caixa Servico — MutatingAdmissionWebhook adds proxy + iptables init-container to pods labeled `mesh.pleme.io/inject=true` | **library + binary shipped** at `pleme-io/enxerto`; Helm chart + k8s deploy on pleme-dev queued | M2.1 |
-| **M2.3** | Cartorio + lacre auto-meshed; intercepted traffic round-trips with mTLS via SVIDs from M1 | M1.3 + M2.2 |
+| **M2.3** 🟡 | Outbound mTLS path + connect-retry + circuit breaker landed in `aresta`; full openclaw-meshed-on-pleme-dev demo is the remaining live gate | **transport-layer code shipped**; live mesh deploy queued | M1.3 + M2.2 |
 | **M3.1** 🟡 | Hanabi gains `:role :sidecar` slot (config schema) + builds in that mode | **typed config surface landed** in `pleme-io/hanabi` main; runtime path that honors `upstream_loopback` + `policy_source` is the remaining slice | independent (small hanabi PR) |
 | **M3.2** | Cartorio's pod has 3 sidecars: proxy + hanabi + cartorio. GraphQL request → proxy (mTLS) → hanabi (rate-limit + CSP) → cartorio | M2.3 + M3.1 |
 | **M3.3** | One observability story (vector co-sidecar emits W3C trace context propagated through proxy + hanabi + workload) | M3.2 |
