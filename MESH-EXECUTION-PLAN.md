@@ -26,7 +26,7 @@
 | **M3.2** | Cartorio's pod has 3 sidecars: proxy + hanabi + cartorio. GraphQL request → proxy (mTLS) → hanabi (rate-limit + CSP) → cartorio | M2.3 + M3.1 |
 | **M3.3** | One observability story (vector co-sidecar emits W3C trace context propagated through proxy + hanabi + workload) | M3.2 |
 | **M4.1** 🟡 | `(defmesh openclaw-mesh …)` form parses, validates type-level invariants | **typed core shipped** at `pleme-io/tatara-mesh` (MeshSpec + validation + YAML round-trip); `#[derive(TataraDomain)]` add-on lands once the proc-macro stabilizes | M3.3 |
-| **M4.2** | `arch-synthesizer/src/mesh.rs` renders the form to: spire CRDs + ServiceAccount→SPIFFE-ID mapping + sidecar-injector config + hanabi config + observability sinks | M4.1 |
+| **M4.2** 🟡 | Renders the form to: spire CRDs + ServiceAccount→SPIFFE-ID mapping + sidecar-injector config + hanabi config + observability sinks | **standalone renderer shipped** at `pleme-io/tatara-mesh-render` (deterministic, 13 tests pass); arch-synthesizer integration is a one-liner when M5 starts | M4.1 |
 | **M4.3** | Same Lisp form re-deploys openclaw mesh from scratch on a fresh kind cluster — full reproducibility | M4.2 |
 
 Each sub-gate is the merge bar for the sprint that ends with it.
