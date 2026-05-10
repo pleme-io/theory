@@ -158,6 +158,35 @@ cleanup Job, etc.) writes the CM. The CM data shape is the
 **typed protocol** between the substrate-side function and the
 operator-facing status.
 
+### 7. Observer composed-resource-name MUST match across steps
+
+The XR-step's `_ocds[<key>]` lookup silently returns `{}` if the
+key doesn't match any Resources-step composition-resource-name —
+no runtime error, just empty status fields forever. Both files
+must construct the observer key from the same primitives.
+
+Drill #23 wedged at `phase=Restoring` for 25+ minutes because:
+
+```kcl
+# pitr-composition.k (Resources step) — emits observer:
+metadata = { name = "result-cm-observer-{}".format(_short_hash) }
+# → "result-cm-observer-2b70f82b"
+
+# pitr-status.k (XR step) — looks up observer:
+_result_cm_key = "result-cm-observer-" + _correlation_id
+# → "result-cm-observer-drill-smoke-2b70f82b"   ← MISMATCH
+```
+
+The result CM had `phase=Succeeded` and `cleanup_status=Completed`
+the entire time; the XR step never saw it. The early-stage
+`correlationId` and `restoreNamespace` fields propagated correctly
+because they're derived from `oxr.metadata.uid`, not from ocds.
+
+**Codification:** when both KCL files derive the observer key,
+factor the construction into an identical helper. A future
+cse-lint check (task #148) will diff the two files' key
+constructions and fail-render on mismatch.
+
 ---
 
 ## V. Worked example
