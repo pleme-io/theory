@@ -42,11 +42,27 @@ This unblocks every consumer that wants to drive a running tear from outside the
 
 The 5,485-LOC `mado::terminal::Terminal` MOVES into `tear-core::pane_grid` as the full SGR + alt-screen + scrollback + hyperlinks + Kitty + OSC + sync-output surface. The receiver (`tear-core`) inherits the entire terminal-state-machine; the donor (`mado`) becomes a pure renderer over a typed grid handle. All 575 mado terminal-state-machine tests run against the moved code unchanged.
 
-### Phase 3 — mado renders `Arc<InProcess>` panes
+### Phase 3 MVP — mado linked against tear-client ✓ SHIPPED
 
-**Status:** not started. **Depends on:** Phase 2.5 (full terminal state machine in tear-core).
+**Status:** shipped at `mado@3c193f4` (binary) + `nix@9eef0d2` (deployed). Phase 2.5 parts 1-3 shipped first (`tear@c5b1475` + `f370902` + `faa1587`) so tear-core covers SGR + alt-screen + scrollback + IL/DL/ICH/DCH/ECH/REP/IRM + OSC titles + DEC 25 + push subscriptions.
 
-**MVP early start (independent of 2.5):** mado can gain a `--tear-pane <id> --socket <path>` mode TODAY that connects to tear-daemon, polls `pane_snapshot` over the wire, and renders the snapshot text in a window. This is a NEW code path that proves Phase 4 mechanics without replacing mado's existing rendering. Colors / SGR / scrollback won't work until Phase 2.5 lands; useful as a smoke test surface only.
+**What landed:** `mado tear-attach <pane> --socket <path>` subcommand. Mado links against `tear-types` + `tear-client`, opens a fresh UDS connection to the daemon, subscribes via `Request::Subscribe`, and writes received `Response::PaneBytes` straight to stdout. The host terminal renders SGR / cursor moves / alt-screen correctly because the bytes are the literal VT stream from the child shell.
+
+End-to-end integration test (`mado/tests/tear_attach_integration.rs`) spawns `tear_daemon::start` in-process, creates a `/bin/sh` session via `tear-client`, subprocess-spawns the just-built mado binary with `tear-attach`, sends `printf MARKER\n`, asserts the marker text appears on mado's piped stdout. Proves the full vertical:
+
+```
+tear-client RPC → daemon → InProcess.send_keys → kernel PTY →
+/bin/sh → child stdout → reader thread → on_bytes →
+subscribers fan-out → daemon's serve_subscription thread →
+CBOR Response::PaneBytes → UDS → mado-as-subscriber's reader
+thread → callback → mado stdout
+```
+
+### Phase 3.1 — mado renders panes in its own GPU window
+
+**Status:** not started. **Depends on:** Phase 3 MVP (done) + Phase 2.5 hyperlinks/sync output (partial today).
+
+Currently `mado tear-attach` writes bytes to stdout — the host terminal renders. Phase 3.1 opens a real mado window and feeds the bytes into mado's own `Terminal` instance so the existing GPU render pipeline renders. The wire stays identical; only the consumer-side changes. Adds keyboard forwarding (mado window → `client.send_keys(pane, bytes)`) and resize forwarding (mado window resize → tear-daemon size update, when that RPC exists).
 
 **Scope:** replace `mado::render::SharedTerminal` (currently `Arc<RwLock<Terminal>>`) with `Arc<InProcess>` + the focused `PaneId`. Each render frame:
 
