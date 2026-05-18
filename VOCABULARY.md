@@ -135,6 +135,9 @@ into the unified theory.
 | **Transition emitter** | Non-blocking audit sink for FSM transitions. Sinks: `AuditFileEmitter`, `NatsEmitter`, `MultiEmitter`. The transition log is the canonical history; receipts and dashboards are derived views. | SHIGOTO.md §III.10, §VIII |
 | **TickReceipt** | Derived per-tick rollup of the Scheduler's state: phase counts, transitions this tick, unhealed drift. Realized for free; consumers do not build receipts. Realizes the M10 "ReconcileReceipt" of the tend plan. | SHIGOTO.md §III.11 |
 | **`skip-shigoto:`** | Per-repo escape-hatch note declaring deviation from the prime-directive rule that every work-graph use shigoto. Same shape as `skip-blackmatter:`, `skip-saguao:`. Allowed only for single-step CLIs, pure-data crates, and thin wrappers around external schedulers. | SHIGOTO.md §XII.3 |
+| **NixAST** | The comprehensive typed Nix expression AST. Every renderer that emits Nix source builds a `NixValue` and renders through one canonical pretty-printer; string concatenation of Nix syntax is the antipattern this AST replaces. Variants cover atoms, collections, lambdas, function application, let/with/if, attrset spread + every operator, inherit, interpolated strings, attr-path access. `Raw` remains as auditable escape hatch (tracked as debt). | NIX-AST.md |
+| **NixValue** | The Rust type that realizes NixAST. Lives in `repo-forge-ast/src/nix_value.rs`; rendered by `repo-forge-render/src/nix_value.rs`. The 7-variant minimal surface (Null/Bool/Int/Str/Path/List/AttrSet/Raw) is being extended to the comprehensive set in NIX-AST.md §II.1 as M0.57a. | NIX-AST.md §II.1 |
+| **`skip-nix-ast:`** | Per-file escape-hatch marker declaring deviation from the rule that every Nix emitter use the NixAST. Allowed only for plain-text non-Nix files. Same convention shape as `skip-blackmatter:`, `skip-shigoto:`, `skip-saguao:`. | NIX-AST.md §0 |
 
 ---
 
