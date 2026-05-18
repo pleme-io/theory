@@ -543,6 +543,58 @@ sink would either need its own type erasure (sacrificing the typed
 contract) or restrict the scheduler to a single output type
 (sacrificing heterogeneity). Per-Job sinks preserve both.
 
+### III.10c. `RecordingJob` — common-shape Job authoring (M0.18)
+
+The wrapper pattern that emerged across tend's four Job impls
+(pull / status / fetch / sync) distilled into a reusable substrate
+trait. Any consumer writing a Job that wants:
+- typed Output that flows through an `OutputSink`,
+- JobId assembled from `(scope, kind, subject)`,
+- a compile-time-const kind id,
+
+implements `RecordingJob` and gets `Job` for free via blanket impl:
+
+```rust
+#[async_trait]
+pub trait RecordingJob: Send + Sync + 'static {
+    type Output: Send + Sync + Clone + 'static;
+    type Error:  std::error::Error + Send + Sync + 'static;
+    const KIND:  &'static str;
+
+    fn scope(&self)        -> JobScope;
+    fn subject(&self)      -> JobSubject;
+    fn output_sink(&self)  -> Option<&Arc<dyn OutputSink<Self::Output>>>;
+
+    async fn execute_body(&self) -> Result<Self::Output, Self::Error>;
+}
+
+#[async_trait]
+impl<T: RecordingJob> Job for T {
+    type Output = T::Output;
+    type Error  = T::Error;
+    fn id(&self)        -> JobId       { /* scope + KIND + subject */ }
+    fn kind(&self)      -> JobKindId   { JobKindId::new(T::KIND) }
+    async fn execute(&self) -> Result<T::Output, T::Error> {
+        let outcome = self.execute_body().await?;
+        if let Some(sink) = self.output_sink() {
+            sink.record(&self.id(), &outcome).await;
+        }
+        Ok(outcome)
+    }
+}
+```
+
+Orphan-rule note: a type that impls `RecordingJob` cannot also impl
+`Job` directly (the blanket creates the conflict). Consumers pick one
+shape per type. Direct `Job` impl remains for the rare case where a
+Job needs dynamic id construction, doesn't record outputs, or has
+non-standard error/output bounds.
+
+Per-implementer savings: ~16 LOC eliminated per Job (the boilerplate
+that lived in each `impl Job` block — id assembly, kind constructor,
+sink-recording dance — now lives once in the blanket impl). For tend's
+four wrappers that's ~64 LOC total.
+
 ### III.11. `TickReceipt` — derived rollup
 
 ```rust
@@ -785,7 +837,11 @@ tend buildable. Reality diverged from the v2 plan in two ways:
 | M0.15a    | Migrate `tend daemon` pull-branch to Scheduler.                               |
 | M0.15b    | Register Exponential retry policy for `tend.pull-repo`.                       |
 | M0.15c    | Wire `AuditFileEmitter` so every transition lands in `scheduler-transitions.jsonl`. |
-| M0.16     | This reconciliation pass on `SHIGOTO.md`.                                     |
+| M0.16     | First reconciliation pass on `SHIGOTO.md` (M0.6 through M0.15c).              |
+| M0.17     | `reconcile_workspace_sync_then_pull` — SyncRepoJob → PullRepoJob via Dag edge per repo. First load-bearing use of `Dag::add_edge`. |
+| M0.18a    | `RecordingJob` trait + blanket `Job` impl in shigoto-types (§III.10c).        |
+| M0.18b    | Refactor 4 tend Job wrappers to `RecordingJob`; ~64 LOC less boilerplate.     |
+| M0.18c    | This rev — spec update for RecordingJob.                                      |
 
 Still deferred (post-M0.16): `tend daemon` sync-branch via `SyncRepoJob`
 + Dag edge sync→pull; `tend daemon` fetch-branch via `FetchRepoJob`;
