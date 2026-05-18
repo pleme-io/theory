@@ -79,9 +79,28 @@ Mado's keybind handlers for split / new-tab / focus-pane call `inproc.split_pane
 
 ### Phase 4 — delete legacy
 
-**Status:** not started. **Depends on:** Phase 3.
+**Status:** not started. **Depends on:** Phase 3.1 (mado must have a working tear-attach GPU mode before single-pane mado becomes the canonical shape — otherwise stripping `WindowState` breaks every existing user).
 
 `mado::pane`, `mado::tab`, `mado::window` deleted. MCP `split_pane` / `new_tab` removed from mado's MCP surface (those operations live in tear's MCP, exposed by tear-daemon — to be added in Phase 5 if desired). 1,217 lines vanish; the prime directive's "solve once" rule is restored.
+
+**Cut-list precondition:** mado main.rs (2,208 LOC) holds `window_for_events.lock().unwrap()` calls throughout the keybind handler. Phase 4 demands replacing those with single-Terminal lookups — substantial refactor risk-bounded by mado's 575-test bin-test suite + the existing scenarios.
+
+## VII. Cumulative session ledger (Phases 1 → 3.0)
+
+| Phase | Commit | What |
+|---|---|---|
+| 1 | `tear@0d0a240` | daemon UDS RPC + client (CBOR over length-prefix), 4 daemon + 2 client tests |
+| 2 | `tear@0dbfd9c` | `MultiplexerControl::pane_snapshot` wire, e2e poll test |
+| 2.5.1 | `tear@c5b1475` | SGR colors (8/16/256/truecolor) + alt-screen (47/1047/1049) + scrollback + DECSC/DECRC + xterm-deferred wrap |
+| 2.5.2 | `tear@f370902` | IL/DL/ICH/DCH/ECH/REP/IRM + OSC 0/1/2 (titles) + DEC mode 25 (cursor visibility) |
+| 2.5.3 | `tear@faa1587` | Push subscription wire (`Request::Subscribe` → streamed `Response::PaneBytes`), e2e push test |
+| 3 MVP | `mado@3c193f4` + `nix@9eef0d2` | `mado tear-attach <pane>` subcommand (stdout streaming), cross-process integration test |
+| 3.0+ | `tear@f7f64b1` + `mado@5266193` + `nix@b10f419` | `pane_resize_absolute` RPC (PTY + grid in lockstep) + 4 proptests on PaneGrid (random bytes never panic, cursor in bounds, dimensions consistent, resize keeps cursor in bounds) + 2 fanout/resize integration tests |
+| tests | `tear@8ea3fd9` | many-sessions stress + subscriber-cleanup-after-kill |
+| roadmap | `theory@55bfaa7` | this document, kept current |
+| classification | `mado@a0813df` | mado/CLAUDE.md flags pane/tab/window LEGACY |
+
+**Workspace test total**: 70+ green across tear (35 core w/ 4 proptests + 8 client + 4 daemon + 15 types + others) + 1 mado integration test for tear-attach. Zero flakes across multiple sequential runs.
 
 ## III. What `tear daemon` is for, given mado embeds InProcess
 
