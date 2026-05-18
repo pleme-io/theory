@@ -30,19 +30,23 @@ This unblocks every consumer that wants to drive a running tear from outside the
 
 ### Phase 2 — tear-core gains per-pane vte parsing + cell grids
 
-**Status:** not started. **Scope:** tear-core's `InProcess::spawn_pty_for` currently logs PTY bytes via a debug closure. M5 needs each pane to own a live `vte::Parser` feeding a `tear_core::PaneGrid` (cell store with cursor, attrs, scrollback). mado's existing `mado::terminal::Terminal` (5,485 LOC) is the natural source — moving it into `tear-core::pane_grid` makes one terminal-state-machine canonical fleet-wide.
+**Status:** ★ MVP SHIPPED at `tear@0dbfd9c`. The full surface (mado's terminal.rs moves here) is Phase 2.5, deferred.
 
-**Acceptance:**
-- `InProcess::feed_pane_bytes(pane_id, &[u8])` parses into the per-pane grid.
-- `InProcess::pane_snapshot(pane_id) -> PaneSnapshot` returns the typed cell grid + cursor + scrollback.
-- The 575 mado terminal-state-machine tests run against the moved code unchanged.
-- Per-pane `seqno`, `synchronized_output` flag, hyperlinks, kitty graphics, OSC — all the things mado's renderer's idle-skip path relies on — preserved.
+**What landed in MVP:** `tear-core::pane_grid::PaneGrid` wraps a `vte::Parser` + a `[rows][cols]` cell buffer with cursor tracking + auto-wrap + scroll-on-overflow. `tear-types::pane_snapshot::{Cell, PaneSnapshot}` are the wire-serializable types. `InProcess` installs one grid per pane in `spawn_pty_for`; bytes from the PTY reader thread feed straight into the parser. `MultiplexerControl::pane_snapshot(pane_id) -> ControlResult<PaneSnapshot>` is the new trait method (default impl returns `Rejected` for backends like tear-tmux that can't observe rendered state). The wire ferries `Request::PaneSnapshot` / `Response::PaneSnapshot`. A `tear snapshot <pane-id>` CLI prints the rendered grid against a running daemon. End-to-end test (`end_to_end_send_keys_then_pane_snapshot_shows_output`) verifies the full vertical: `send_keys → kernel PTY → child shell → stdout → reader thread → PaneGrid::feed → vte parser → snapshot → CBOR → UDS → client`.
 
-**Why this is the heaviest phase:** it's a 5k LOC code move + ownership boundary change. The receiver (`tear-core`) inherits the entire terminal-state-machine; the donor (`mado`) becomes a pure renderer over a typed grid handle.
+**Out of MVP scope (deferred to Phase 2.5):** SGR colors / attrs, alt-screen, scrollback, tab stops, scrolling regions, IRM, DECSCUSR, hyperlinks, OSC, DEC mode 2026 (synchronized output), Kitty graphics, sixel. These all already live in mado's `terminal.rs` (5,485 LOC); Phase 2.5 ports that code into `tear-core::pane_grid` so both apps share one state machine.
+
+### Phase 2.5 — port mado's terminal.rs to tear-core (heavy lift)
+
+**Status:** not started. **Depends on:** Phase 2 MVP (done).
+
+The 5,485-LOC `mado::terminal::Terminal` MOVES into `tear-core::pane_grid` as the full SGR + alt-screen + scrollback + hyperlinks + Kitty + OSC + sync-output surface. The receiver (`tear-core`) inherits the entire terminal-state-machine; the donor (`mado`) becomes a pure renderer over a typed grid handle. All 575 mado terminal-state-machine tests run against the moved code unchanged.
 
 ### Phase 3 — mado renders `Arc<InProcess>` panes
 
-**Status:** not started. **Depends on:** Phase 2.
+**Status:** not started. **Depends on:** Phase 2.5 (full terminal state machine in tear-core).
+
+**MVP early start (independent of 2.5):** mado can gain a `--tear-pane <id> --socket <path>` mode TODAY that connects to tear-daemon, polls `pane_snapshot` over the wire, and renders the snapshot text in a window. This is a NEW code path that proves Phase 4 mechanics without replacing mado's existing rendering. Colors / SGR / scrollback won't work until Phase 2.5 lands; useful as a smoke test surface only.
 
 **Scope:** replace `mado::render::SharedTerminal` (currently `Arc<RwLock<Terminal>>`) with `Arc<InProcess>` + the focused `PaneId`. Each render frame:
 
