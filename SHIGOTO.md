@@ -15,8 +15,28 @@
 > retryable, parallelism-bounded work graph adopts this shape.
 > `skip-shigoto:` per-repo to deviate.
 >
-> **Status.** Draft v2. Bootstrap consumer (`tend`) migration plan in §IV.
-> Prime-directive promotion in §V is gated on two production consumers.
+> **Status.** Draft v2 + M0.16 reconciliation. Bootstrap consumer
+> (`tend`) migration is M0.10b through M0.15c; see §IV.5 for the
+> shipped Job impls. Prime-directive promotion in §V is gated on two
+> production consumers.
+>
+> **Shipped vs aspirational.** As of M0.16 (this rev), the v0.1
+> shipped surface intentionally omits several pieces the spec below
+> describes: `Job::Input` + `JobContext` are deferred (jobs hold input
+> in `self` and execute as `async fn execute(&self) -> Result<Output,
+> Error>`); `JobKind` as a separate trait is deferred (kind-defaults
+> register against `JobKindId` on the Scheduler directly); per-Job
+> override methods (`Job::gates()` / `Job::retry_policy()` /
+> `Job::timeout()`) are deferred (registration is scheduler-level).
+> Each is a "land when a real consumer's need forces it" decision per
+> §VI.
+>
+> **Additions since v2 spec.** What shipped that this doc didn't yet
+> describe at v2: `OutputSink<O>` (§III.10b; M0.11), concurrent wave
+> execution (§III.6b; M0.13), the four tend Job wrappers proving the
+> substrate composes for a real consumer (§IV.5; M0.10b–f, M0.12,
+> M0.14, M0.15a–c). Sections below reflect the actually-shipped
+> surface; aspirational pieces are explicitly labeled.
 
 ---
 
@@ -104,41 +124,48 @@ prose carries the invariants.
 
 ### III.1. `Job` — the unit of work
 
+**Shipped (v0.1):**
+
 ```rust
 #[async_trait]
 pub trait Job: Send + Sync + 'static {
-    type Input:  JobInput;
-    type Output: JobOutput;
-    type Error:  JobError;
+    type Output: Send + 'static;
+    type Error:  std::error::Error + Send + Sync + 'static;
 
     fn id(&self)   -> JobId;
     fn kind(&self) -> JobKindId;
 
     /// Side-effecting work. Called only on Ready → Running. MUST be
     /// idempotent — execute may be re-invoked after a scheduler crash.
-    async fn execute(
-        &self,
-        input: Self::Input,
-        ctx:   &JobContext,
-    ) -> Result<Self::Output, Self::Error>;
-
-    /// Optional gate / retry policy / timeout overrides. Defaults come
-    /// from the JobKindId's registered JobKind impl.
-    fn gates(&self)        -> Vec<Box<dyn Gate>> { Vec::new() }
-    fn retry_policy(&self) -> Option<RetryPolicy>  { None }
-    fn timeout(&self)      -> Option<Duration>     { None }
+    async fn execute(&self) -> Result<Self::Output, Self::Error>;
 }
 ```
 
-Invariants the trait pins:
+**Aspirational (lands when a consumer's need forces it):** `type Input`
++ `JobContext` argument to `execute`, plus `gates() / retry_policy() /
+timeout()` per-Job override methods. The v0.1 substitutes:
+- Inputs ride in `self` — jobs are pure-data structs constructed with
+  whatever they need to do their work (workspace, repo_name, repo_path,
+  pre-resolved URLs, optional sinks).
+- Gates/retry/timeout register against `JobKindId` on the scheduler
+  (`register_gate`, `register_retry_policy`, `set_timeout`) — the
+  per-kind defaults the §III.4 `JobKind` trait would have provided.
+- Cancellation/clock are external (`tokio::time::timeout` wrapping
+  `execute`; SIGTERM via `tsunagu::ShutdownController`).
+
+Invariants the shipped trait pins:
 - `'static + Send + Sync` — jobs move between scheduler threads.
-- Typed `Input` / `Output` / `Error` — no untyped JSON in the work
-  contract. Consumers serialize for transport, not for typing.
+- Typed `Output` / `Error` — no untyped JSON in the work contract.
+  Consumers serialize for transport, not for typing.
 - `execute` is async on tokio. Sync work uses `spawn_blocking`.
 - `id()` and `kind()` are pure — the scheduler reads them many times
   per cycle; no IO allowed.
 - `execute` is idempotent (§III.13). The contract is testable via
   `shigoto-test`'s idempotence proptest.
+- The scheduler's `execute_erased` blanket impl on `ErasedJob` collapses
+  the typed `Output` / `Error` to `()` / `Box<dyn Error>` so the
+  scheduler can hold heterogeneous Jobs in one DAG. Typed Outputs reach
+  consumers via `OutputSink<O>` (§III.10b), not the FSM.
 
 ### III.2. `JobId` — typed identity
 
@@ -256,36 +283,33 @@ phases or signals fail to build until handled.
 
 Every transition is recorded by the `TransitionEmitter` (§III.10).
 
-### III.4. `JobKind` — typed work classes
+### III.4. `JobKind` — typed work classes (aspirational)
+
+**Status:** the standalone `JobKind` trait is deferred. v0.1 registers
+kind-default budgets, gates, retry policies, and timeouts directly
+against `JobKindId` on the Scheduler:
 
 ```rust
-pub trait JobKind: Send + Sync + 'static {
-    fn id(&self) -> JobKindId;
-    fn default_retry_policy(&self) -> RetryPolicy;
-    fn default_gates(&self)        -> Vec<Box<dyn Gate>>;
-    fn default_budget(&self)       -> BudgetSpec;
-    fn default_timeout(&self)      -> Option<Duration>;
-}
+scheduler.install_budget(budget_tree).await;
+scheduler.register_gate(JobKindId::new("tend.pull-repo"), gate).await;
+scheduler.register_retry_policy(JobKindId::new("tend.pull-repo"), policy).await;
+scheduler.set_timeout(job_id, Duration::from_secs(60)).await;
 ```
 
-A `JobKind` is the typed work class. Examples: `PullRepoKind`,
-`DiscoverOrgKind`, `RenderTerraformKind`. Two jobs sharing a
-`JobKindId` share kind-default budgets, gates, retry, and timeout.
-Per-job `Job::gates()` / `Job::retry_policy()` / `Job::timeout()`
-override kind defaults.
+`JobKindId` is a typed work-class identifier (`String` wrapper). Two
+Jobs sharing a `JobKindId` share the registered defaults. Examples
+from the bootstrap consumer (`tend`):
 
-JobKinds are registered with the Scheduler at construction:
+| Kind id              | Spec section |
+|---------------------|--------------|
+| `tend.pull-repo`    | §IV.5        |
+| `tend.status-repo`  | §IV.5        |
+| `tend.fetch-repo`   | §IV.5        |
+| `tend.sync-repo`    | §IV.5        |
 
-```rust
-let scheduler = InProcessScheduler::builder()
-    .register_kind(PullRepoKind)
-    .register_kind(DiscoverOrgKind)
-    ...
-    .build();
-```
-
-The registry is the bridge between `JobKindId` (carried in JobId) and
-`JobKind` (the trait impl whose defaults apply).
+The `JobKind` trait lands when a consumer's need forces a richer
+defaults surface (e.g., kind-specific behavioral knobs that aren't
+covered by the scheduler-level registrations).
 
 ### III.5. `Dag` — explicit topology
 
@@ -320,35 +344,54 @@ when a repo is archived); each mutation re-validates.
 
 ### III.6. `Scheduler` — the runtime
 
+**Shipped:**
+
 ```rust
 #[async_trait]
 pub trait Scheduler: Send + Sync {
-    /// Drive the Dag one tick forward. Returns when no further
-    /// progress is possible (all jobs in terminal or Waiting phase,
-    /// all Retrying jobs still in backoff).
     async fn tick(&self, dag: &mut Dag) -> Result<TickReceipt, SchedulerError>;
-
-    /// Block until any job's state changes or shutdown fires.
-    /// Used by daemons to throttle ticks.
-    async fn wait_for_change(&self, shutdown: &CancellationToken) -> WaitOutcome;
-
-    /// Read-only snapshot of the current FSM map.
-    fn snapshot(&self, dag: &Dag) -> Snapshot;
-
-    /// Externally-driven transition (operator action).
-    fn operator_transition(
-        &self,
-        job_id: &JobId,
-        to:     JobPhase,
-        reason: TransitionReason,
-    ) -> Result<(), IllegalTransition>;
+    async fn snapshot(&self, _dag: &Dag) -> Snapshot;
 }
 ```
 
+`InProcessScheduler` is the v0.1 impl. Outside the trait it exposes
+the typed registration API:
+- `register_job(Arc<dyn ErasedJob>)`
+- `register_gate(JobKindId, Arc<dyn Gate>)`
+- `register_retry_policy(JobKindId, RetryPolicy)`
+- `set_timeout(JobId, Duration)`
+- `install_budget(BudgetTree)`
+- `with_emitter(Arc<dyn TransitionEmitter>)` — builder
+- `operator_transition(&JobId, JobPhase, TransitionReason)`
+
 A `Scheduler` is *not* a daemon. It does one tick per call. Daemons
-loop over `tick → wait_for_change → tick`. K8s reconcilers map each
-CR event to one `tick`. Default impl: `InProcessScheduler`. Future
-impls (distributed, persistent, replayable) plug behind the trait.
+loop `tick → sleep → tick` (the deferred `wait_for_change` is replaced
+by a sleep + SIGTERM polling in v0.1). Future impls (distributed,
+persistent, replayable) plug behind the trait.
+
+### III.6b. Concurrent wave execution (M0.13)
+
+`InProcessScheduler.tick()` runs each topological wave in three passes:
+
+1. **Pass 1 (sequential):** drive every Job through fast FSM transitions
+   (gate evaluation, budget allocation) up to `Running`. Lock-contended
+   but CPU-cheap.
+2. **Pass 2 (concurrent):** collect every Job in `Running`, fan out
+   their `execute_erased()` calls into a `tokio::task::JoinSet`, await
+   all. **A wave of N Ready jobs runs in `O(slowest_execute)`, not
+   `O(sum_of_executes)`.**
+3. **Pass 3 (sequential):** drain terminal transitions (`Failed →
+   RetryDecide → {Retrying | Deadlettered}`) for any Job whose execute
+   returned.
+
+Inter-wave dependencies still serialize: Jobs in wave 2 can't start
+their pass-1 transitions until wave 1's pass-3 has landed terminal
+phases for their upstreams. The concurrency is *within* a wave.
+
+**Correctness contract:** the FSM still goes through every legal
+transition `shigoto_types::advance` declares. The wave-level
+parallelism only changes *when* execute runs relative to the FSM walk;
+phase transitions themselves remain serialized.
 
 ### III.7. `Budget` — typed parallelism
 
@@ -462,6 +505,43 @@ job's phase change). Throughput / latency / queue-depth / per-tick
 duration are sibling concerns surfaced separately (Vector →
 VictoriaMetrics or Datadog APM) so the audit log doesn't become a
 sample-rate-sensitive metrics store.
+
+### III.10b. `OutputSink<O>` — typed output capture (M0.11)
+
+The scheduler's `execute_erased` blanket impl collapses every Job's
+typed `Output` to `()` so heterogeneous Jobs can live in one
+`Vec<Box<dyn ErasedJob>>`. That erasure means the FSM never sees the
+typed Output value — but consumers (reconcile receipts, dashboards,
+audit trails) need it. `OutputSink<O>` is the typed surface that
+bridges:
+
+```rust
+#[async_trait]
+pub trait OutputSink<O>: Send + Sync + 'static
+where
+    O: Send + Sync + 'static,
+{
+    async fn record(&self, job_id: &JobId, output: &O);
+}
+```
+
+A Job calls `sink.record(&self.id(), &output)` from its `execute`
+after computing the outcome. Per-Job sink wiring (not scheduler-level)
+keeps the typed `O` parameter from leaking into the scheduler's
+heterogeneous storage. Concrete sinks in `shigoto-emit`:
+
+- `NullSink<O>` — discards every record. Default for Jobs that don't
+  surface their outputs.
+- `InMemorySink<O>` (requires `O: Clone`) — stores into
+  `Arc<Mutex<HashMap<JobId, O>>>`. Reader API: `drain()` /
+  `snapshot()` / `len()` / `is_empty()`. Overwrites on duplicate
+  JobId so retries don't accumulate.
+
+Why per-Job (not scheduler-attached): the scheduler holds Jobs as
+trait objects with the type parameter erased. A scheduler-attached
+sink would either need its own type erasure (sacrificing the typed
+contract) or restrict the scheduler to a single output type
+(sacrificing heterogeneity). Per-Job sinks preserve both.
 
 ### III.11. `TickReceipt` — derived rollup
 
@@ -659,41 +739,92 @@ dimension, isolated via the per-workspace dimension.
 The existing `WorkKind` enum in `tend/src/planner.rs` is the primordial
 version of this table.
 
-### IV.3. Migration plan — commits to main, not PRs
+### IV.3. Migration plan — what actually shipped
 
-Per operator instruction, six commits land directly on main, in this
-order, each leaving tend buildable and the daemon runnable.
+Per operator instruction, commits land directly on main, each leaving
+tend buildable. Reality diverged from the v2 plan in two ways:
 
-**M0.6.** Scaffold `pleme-io/shigoto`. Cargo workspace skeleton, empty
-trait stubs, `InProcessScheduler` placeholder that always returns
-empty `TickReceipt`. Substrate `rust-workspace-release.nix`. CI green.
-No tend changes.
+1. The substrate matured before the daemon migrated — M0.9a–s built
+   out every shigoto crate in 10-line atomic steps rather than landing
+   the full scheduler in one M0.9.
+2. The daemon migration happened *after* a standalone `tend reconcile`
+   CLI proved the substrate composes for tend's real workload, rather
+   than going directly from planner-based to scheduler-based daemon.
 
-**M0.7.** Lift `tend/src/operator/dag.rs` (212 LOC) into `shigoto-dag`.
-Generalize `DagNodeId` to `JobId`. Tend operator switches its dag-import
-to depend on `shigoto-dag`; existing operator tests pass unchanged.
+| Milestone | What shipped                                                                  |
+|----------:|-------------------------------------------------------------------------------|
+| M0.6      | Scaffold `pleme-io/shigoto` workspace; CI green; substrate flake template.   |
+| M0.7      | Lift `tend/src/operator/dag.rs` → `shigoto-dag::Dag`; tend operator migrated. |
+| M0.8      | Tend operator consumes `shigoto-dag` (typed `JobId` everywhere).              |
+| M0.9a     | Typed FSM `advance()` in shigoto-types (Phase × Signal exhaustive match).     |
+| M0.9b     | `Job` + `ErasedJob` traits; blanket impl gives every typed `Job` an erased view. |
+| M0.9c     | `InProcessScheduler` tick loop (sequential v0; concurrent in M0.13).           |
+| M0.9d     | `TransitionEmitter` sinks: `NullEmitter` / `AuditFileEmitter` / `MultiEmitter`. |
+| M0.9e     | `Dag::predecessors()` accessor — prerequisite for `AllUpstreamsTerminal`.      |
+| M0.9f     | Standard gates + `reduce()` (worst-wins) in `shigoto-gate`.                    |
+| M0.9g–h   | Wire gate + retry registries into scheduler.                                   |
+| M0.9i–j   | `BudgetTree::try_allocate / release`; wire into Ready→Running.                |
+| M0.9k     | Make `Scheduler::snapshot` async (drop `block_in_place`).                     |
+| M0.9l     | `operator_transition` emits via `TransitionEmitter` immediately.              |
+| M0.9m     | Populate `TickReceipt.unhealed` at end of tick.                               |
+| M0.9n     | `Snapshot::failure_set()` derived view.                                        |
+| M0.9p     | `idempotence_quickcheck` harness in `shigoto-test`.                            |
+| M0.9r     | End-to-end integration test exercising the full pipeline (gates + retry + budget + emitter). |
+| M0.9s     | `shigoto` umbrella crate re-exports the full surface; smoke test.             |
+| M0.10a    | Add full shigoto suite as tend Cargo deps.                                    |
+| M0.10b    | `PullRepoJob` — first typed Job wrapper in tend; 5 tests.                     |
+| M0.10c    | Scheduler composition test — N PullRepoJobs through real scheduler.           |
+| M0.10d    | `StatusRepoJob` (read-only; perfect fit for idempotence quickcheck).          |
+| M0.10e    | `FetchRepoJob` + wrapper-pattern doc.                                         |
+| M0.10f    | `SyncRepoJob` — completes the 4-Job reconcile primitive set.                  |
+| M0.11a    | `OutputSink<O>` typed primitive + `NullSink` + `InMemorySink` (§III.10b).     |
+| M0.11b    | Wire `OutputSink<O>` into all 4 tend Job wrappers.                             |
+| M0.12     | `tend reconcile [--workspace W]` CLI — first user-facing surface.             |
+| M0.13     | **Concurrent wave execution** in scheduler (§III.6b); 4×200ms in 200ms wall. |
+| M0.14     | Budget-bounded reconcile (default `max_inflight=16`). Real-world: 118 repos in 21s. |
+| M0.15a    | Migrate `tend daemon` pull-branch to Scheduler.                               |
+| M0.15b    | Register Exponential retry policy for `tend.pull-repo`.                       |
+| M0.15c    | Wire `AuditFileEmitter` so every transition lands in `scheduler-transitions.jsonl`. |
+| M0.16     | This reconciliation pass on `SHIGOTO.md`.                                     |
 
-**M0.8.** Lift the *trait surfaces* (not the flake-domain bodies) of
-`apply.rs`, `gates.rs`, `failure_set.rs`, `budget.rs` into the matching
-shigoto crates. Flake-domain-specific gate bodies and apply bodies stay
-in tend as `impl Gate`/`impl Job` for tend's flake-update kinds.
-Operator tests pass.
+Still deferred (post-M0.16): `tend daemon` sync-branch via `SyncRepoJob`
++ Dag edge sync→pull; `tend daemon` fetch-branch via `FetchRepoJob`;
+the original M2–M10 reshape from §IV.4.
 
-**M0.9.** Migrate `tend/src/daemon.rs` to consume `shigoto-scheduler`.
-Implement the eleven job kinds (§IV.2) as `impl Job for ...`. Delete
-`tend/src/planner.rs`. The `tend daemon` CLI flag surface is preserved.
-The currently-running daemon (post-M1 from the older plan) continues
-to fast-forward repos with no operator-visible change.
+### IV.5. The four shipped Job wrappers
 
-**M0.10.** Migrate `tend/src/operator/reconcile.rs` to the Scheduler.
-CRDs become JobKind declarations. kube-runtime reduces to an adapter
-that converts CR events to `Scheduler::tick` calls. Both surfaces now
-share one runtime.
+Substrate primitives that landed during M0.10b–M0.10f, proving the
+shigoto surface composes for the bootstrap consumer. Each follows the
+same six-piece pattern documented in `tend/src/jobs/mod.rs`:
 
-**M0.11.** Delete duplicated operator-side primitives. Update
-CLAUDE.md (substrate primitive index goes from ★ to ★★), VOCABULARY.md
-(no changes needed), pleme-io/BLACKMATTER.md (if §V phases need
-language).
+| Job kind             | Wraps                            | Output             | Mutates? |
+|----------------------|----------------------------------|--------------------|----------|
+| `tend.pull-repo`     | `sync::pull_one_repo`            | `PullOutcome`      | yes (git pull --ff-only) |
+| `tend.status-repo`   | `sync::check_one_repo_status`    | `RepoStatus`       | no       |
+| `tend.fetch-repo`    | `sync::fetch_one_repo`           | `FetchOutcome`     | yes (git fetch --all --prune) |
+| `tend.sync-repo`     | `sync::sync_one_repo`            | `SyncOutcome`      | yes (git clone) |
+
+The pattern:
+
+1. `pub(crate) const X_REPO_KIND: &str = "tend.x-repo";` — canonical id.
+2. Pure-data struct (`workspace`, `repo_name`, `repo_path`, optional
+   `quiet`, `clone_url`, etc.) — no I/O at construction.
+3. `with_output_sink(sink)` builder attaches `Arc<dyn OutputSink<O>>`.
+4. `XRepoError::Invocation(String)` — only invocation failures flow
+   through `Err`; typed-success-with-failure outcomes (e.g.
+   `PullOutcome::Failed { stderr }`) flow through `Output` so the
+   scheduler decides retries from the right channel.
+5. `Job::id()` returns `(JobScope::Workspace(...), JobSubject::Repo(...),
+   JobKindId::new(X_REPO_KIND))` — the three coordinates fully name the
+   Job across all tend workspaces.
+6. `Job::execute()` is a `spawn_blocking` hop into the matching
+   `sync.rs` helper, then `sink.record(&self.id(), &outcome).await` if
+   an output sink is wired in.
+
+The wrapper pattern's documentation is in `tend/src/jobs/mod.rs`'s
+top-of-file docstring. The pattern is stable across four instances;
+the macro-extraction question is parked until a 5th instance reveals
+a uniform shape that a `macro_rules!` could template cleanly.
 
 ### IV.4. The original M2–M10 reshape
 
