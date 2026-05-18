@@ -497,21 +497,47 @@ product (pangea-api), and the substrate (Ruby + Rust libraries).
 
 ## VIII. Phases
 
-| Phase | Scope |
-|---|---|
-| **M0.0 (today)** | `Pangea::Backend` + `Pangea::Magma` exist in pangea-core (theory/MAGMA.md §II.11 + this session's adds). magma-arch-test crate exposes the typed harness used by `Pangea::Magma.verify_workspace`. |
-| **M0.1 (next)** | `Pangea::Magma::Workspace` + `Chain` Ruby types land in pangea-core. `magma flow run` (already exists) drives them. |
-| **M0.2** | `Pangea::Magma::Migration` + `magma migrate` subcommand. State-organization moves are the load-bearing capability — proves the orchestration vision. |
-| **M0.3** | `Pangea::Magma::Distribution` + `Split` + `Merge`. Built-in `:tier_separation` strategy. |
-| **M0.4** | `Pangea::Magma::Optimization` typed hints. Wires to `shigoto::Scheduler` via magma-apply. |
-| **M0.5** | `Pangea::Magma::Orchestrator` umbrella + `pangea orchestrate` CLI subcommand. |
-| **M0.6** | MCP tools: `pangea_orchestrate` / `pangea_migrate_dry_run` / `pangea_split`. |
-| **M0.7** | tatara-lisp `(defpangea-orchestrator …)` authoring surface. |
-| **M0.8** | pangea-architectures sweep: every workspace declares typed inputs/outputs; pangea-architectures' rspec suite uses `Pangea::Magma::Matchers` for cross-workspace assertions. |
+| Phase | Status | Scope |
+|---|---|---|
+| **M0.0** | ✅ shipped | `Pangea::Backend` + `Pangea::Magma` exist in pangea-core (theory/MAGMA.md §II.11). magma-arch-test crate exposes the typed harness used by `Pangea::Magma.verify_workspace`. |
+| **M0.1** | ✅ shipped | `Pangea::Magma::Workspace` + `Chain` Ruby types live in pangea-core. `Chain#reconcile_all` drives `magma flow run` via Pangea::Magma::Runner. Integration spec (`magma_chain_integration_spec.rb`) verifies topo order + output propagation end-to-end. |
+| **M0.2** | ✅ shipped | `Pangea::Magma::Migration` + `magma migrate` subcommand + `magma-migrate` Rust crate. Atomic two-phase commit, BLAKE3 receipts pre/post. 5 unit tests cover atomic move + validation + dry-run. |
+| **M0.3** | ✅ shipped | `magma split` + `magma merge` CLI subcommands as typed wrappers over `magma migrate`. `merge` auto-enumerates source state. |
+| **M0.4** | ✅ shipped | `Pangea::Magma::Optimization` typed hints (strategy / max_concurrency / retries / timeout_ms) plumb through Chain → flow.json → magma-cli's FlowFile. Honored by shigoto-wrapped apply (planned). |
+| **M0.5** | ✅ shipped | `Pangea::Magma::Orchestrator` umbrella + `pangea orchestrate` CLI subcommand with `--backend`, `--only`, `--dry-run` flags. |
+| **M0.6** | ✅ shipped | MCP tools `pangea_orchestrate` / `magma_migrate_dry_run` / `magma_migrate` / `magma_split` / `magma_merge`, dispatched in-process (no shelling out). Destructive ones gated by `confirm:true`. `magma capabilities` reports 17 typed MCP tools. |
+| **M0.7** | ✅ shipped (minimal) | `magma flow` accepts `.lisp` / `.tatara` / `.scm` via `tatara_lite` reader. `(deforch …)` compiles to FlowFile JSON. 3 proptest invariants × 48 cases each lock in the round-trip. |
+| **M0.8** | 🚧 in progress | pangea-architectures sweep — typed `Pangea::Magma::Workspace` declarations alongside templates. Five workspaces promoted (k3s-permissions, k3s-cluster, akeyless-dev-cluster, nix-builders, cloudflare-pleme × 6 templates). |
+| **M0.9** | ✅ shipped | **Compounding refactor.** Extracted `magma-flow` shared crate (FlowFile / topological_order / run engine — eliminates duplication between magma-cli and magma-mcp). Extracted `Pangea::Magma::Runner` shared subprocess helper. Added `Pangea::Magma::Stack.build` high-level helper (auto-derives cross-tier edges by output↔input name matching). Added `Pangea::Magma::TestSupport` shared rspec scaffolding. Default `requires:` set in Workspace.declare. `magma_plan` MCP tool now dispatches in-process. |
 
-Each phase ships with rspec + Rust integration coverage. By M0.8 the
-substrate has fully integrated Pangea + magma + every existing
-pangea-* gem at the typed orchestration layer.
+Each shipped phase carries rspec + Rust integration coverage. By
+M0.8 every existing pangea-architectures workspace will declare
+typed inputs/outputs; pangea-architectures' rspec suite uses
+`Pangea::Magma::Matchers` and `Pangea::Magma::TestSupport` for
+cross-workspace assertions.
+
+### The compounding surface today
+
+Operators reach for one of these four authoring forms, in order of
+ascending leverage:
+
+1. **`Pangea::Magma::Workspace.declare(…)`** — typed I/O contract
+   for a single state boundary. One per `.rb` template.
+2. **`Pangea::Magma::Chain.build do |c| c.workspace …; c.edge … end`** —
+   explicit cross-workspace wiring. Use when edges aren't pure
+   name-matches.
+3. **`Pangea::Magma::Stack.build(name:, tiers:, optimization:, attestation:)`** —
+   high-level. Auto-derives cross-tier typed edges from upstream
+   outputs ↔ downstream inputs sharing a name. The convention every
+   pleme-io workspace pair already follows; Stack codifies it.
+4. **`(deforch :name … :workspaces (…) :edges (…))`** — tatara-lisp
+   surface. Same FlowFile JSON; alternate authoring path.
+
+All four compile mechanically to the same canonical FlowFile shape
+consumed by the single `magma_flow::run` engine. The four interfaces
+(CLI, MCP, Rust library, tatara-lisp) all dispatch into the same
+engine — no possibility of drift between authoring surface and
+execution.
 
 ---
 
