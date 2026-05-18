@@ -83,19 +83,23 @@ Mado's keybind handlers for split / new-tab / focus-pane call `inproc.split_pane
 
 MVP non-goals (Phase 3.1.x slices): special-key translation (arrows / function / chords), clipboard / selection / search / Rhai scripts. Only `KeyEvent.text` (UTF-8 char input) forwards today.
 
-### Phase 4 — delete legacy
+### Phase 4 — delete legacy ✓ SHIPPED
 
-**Status:** 4.1 + 4.2 SHIPPED at `mado@bdb8721` + `nix@5217496`. 4.3 → 4.5 deferred.
+**Status:** all parts SHIPPED. 4.1 + 4.2 at `mado@bdb8721` + `nix@5217496`. 4.3 + 4.4 + 4.5 at `mado@f26bb00` + `nix@dd4afb9`.
 
 **Phase 4.1 (shipped):** MCP `split_pane` + `new_tab` tool handlers + `SplitPaneInput` struct + their unit tests removed. mado's MCP no longer advertises multi-pane operations.
 
 **Phase 4.2 (shipped):** `Action::NewTab` / `CloseTab` / `NextTab` / `PrevTab` / `SplitHorizontal` / `SplitVertical` / `FocusNext` / `FocusPrev` / `ClosePane` enum variants deleted. `parse_action` returns `None` for the corresponding strings + `goto_split:*` + `close_surface`. Default binding count: 26 → 17. main.rs keybind handler arms for these actions deleted. 5 tests removed that exercised the deleted actions. Net `-153` LOC across mado.
 
-**Phase 4.3 — 4.5 (deferred, not started):** Strip `Arc<Mutex<WindowState>>` from main.rs (~113 lines reference WindowState/pane/tab; 34 call `window_for_events.lock()` directly). Refactor `render.rs` to drop the multi-pane branch (`render_multi_pane` + `PaneRect` iteration). Delete `pane.rs` / `tab.rs` / `window.rs`. Verify all 570+ mado tests + every scenario YAML still pass.
+**Phase 4.3 (shipped):** New `mado/src/single_pane.rs` module (238 LOC) — `SinglePane` struct owning the single Terminal + PTY channels + selection + search + exited flag. `spawn()` constructor lifts the PTY-spawn / reader / writer / resize orchestration verbatim from `WindowState::spawn_pane_for_tab` minus TabState bookkeeping. WindowState-compat shims (`focused_pane` / `any_exited` / `all_panes` / `resize_panes`) let the 30+ keybind-handler callsites in main.rs keep their shape unchanged. main.rs: `Arc<Mutex<WindowState>>` → `Arc<SinglePane>` (114 line delta).
 
-Net delete at full completion: 1,217 LOC (pane.rs 418 + tab.rs 331 + window.rs 468). main.rs single-Terminal refactor adds tighter Terminal-direct call sites in place of the WindowState indirection.
+**Phase 4.4 (shipped):** render.rs lost its `window: Option<Arc<Mutex<WindowState>>>` field, the `set_window` method, the `render_multi_pane` function (319 LOC), and the `if self.window.is_some()` dispatch branch. PaneRect / WindowState use-statements removed. All P28 cursor-blink + P14 BSU/ESU + P2 idle-skip machinery preserved (those were single-pane optimisations all along).
 
-**Cut-list precondition:** mado main.rs (2,208 LOC) holds `window_for_events.lock().unwrap()` calls throughout the keybind handler. Phase 4.3 demands replacing those with single-Terminal lookups — substantial refactor risk-bounded by mado's 570-test bin-test suite + the existing scenarios. Each callsite needs `WindowState::focused_pane()` → `terminal.read()` style rewriting + dropping the multi-pane methods (`split`, `new_tab`, `focus_next`, etc.).
+**Phase 4.5 (shipped):** `pane.rs` (418 LOC), `tab.rs` (331 LOC), `window.rs` (468 LOC) deleted. `mod pane / mod tab / mod window` declarations gone from main.rs.
+
+**Net delete:** 1,621 LOC across mado (1,217 module files + 319 multi-pane render + ~85 keybind handlers).
+
+**Tests:** 539/539 mado bin tests green (was 570 pre-Phase-4.5 — 31 unit tests deleted along with their parent modules). 1 scenario test green. 1 cross-process tear-attach integration test green — proves `mado tear-attach` still subscribes → daemon → PTY → `/bin/sh` → marker on mado stdout end-to-end against the refactored single-pane mado.
 
 ## VII. Cumulative session ledger (Phases 1 → 3.0)
 
@@ -113,6 +117,7 @@ Net delete at full completion: 1,217 LOC (pane.rs 418 + tab.rs 331 + window.rs 4
 | classification | `mado@a0813df` | mado/CLAUDE.md flags pane/tab/window LEGACY |
 | 3.1 MVP | `mado@2297aff` + `nix@da5334f` | `mado tear-attach --gpu` opens real GPU window backed by Terminal + tear subscription + key/resize forwarding (158 LOC new module) |
 | 4.1+4.2 | `mado@bdb8721` + `nix@5217496` | MCP split_pane/new_tab gone, 9 multiplexing keybind Actions gone, default bindings 26→17, net -153 LOC |
+| 4.3+4.4+4.5 | `mado@f26bb00` + `nix@dd4afb9` | WindowState/PaneManager/TabManager deleted; pane.rs/tab.rs/window.rs files gone; new single_pane.rs module owns the single Terminal+PTY; net **-1,621 LOC** |
 
 **Workspace test total**: 70+ green across tear (35 core w/ 4 proptests + 8 client w/ 4 e2e + 4 daemon + 15 types + others) + 570 mado bin tests + 1 mado tear-attach integration test (full cross-process vertical: tear-client → daemon → InProcess → /bin/sh PTY → reader thread → subscribers → CBOR/UDS → mado-as-subscriber → stdout). Zero flakes across multiple sequential runs.
 
