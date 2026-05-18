@@ -77,13 +77,25 @@ Mado's keybind handlers for split / new-tab / focus-pane call `inproc.split_pane
 - Existing mado UX is preserved bit-for-bit (Ctrl-B prefix, all keybinds, all MCP introspection).
 - mado's `WindowState::all_panes` / `focused_pane` / etc. become trivial inproc wrappers (or are removed entirely).
 
+### Phase 3.1 MVP ✓ SHIPPED
+
+**Status:** shipped at `mado@2297aff` + `nix@da5334f` (deployed). Adds `mado tear-attach --gpu <pane>` mode: opens a real madori GPU window backed by a single `Terminal` (no WindowState), subscribes to the pane's PTY byte stream from tear-daemon, feeds bytes into the local Terminal's vte parser, renders via mado's existing `TerminalRenderer` in its single-pane fallback path. Forwards text-producing keystrokes via `client.send_keys`, forwards window resize via `client.pane_resize_absolute`. New module `mado/src/gui_tear_attach.rs` (158 LOC) lives parallel to mado's legacy WindowState-backed GUI so Phase 4 can delete the legacy later.
+
+MVP non-goals (Phase 3.1.x slices): special-key translation (arrows / function / chords), clipboard / selection / search / Rhai scripts. Only `KeyEvent.text` (UTF-8 char input) forwards today.
+
 ### Phase 4 — delete legacy
 
-**Status:** not started. **Depends on:** Phase 3.1 (mado must have a working tear-attach GPU mode before single-pane mado becomes the canonical shape — otherwise stripping `WindowState` breaks every existing user).
+**Status:** 4.1 + 4.2 SHIPPED at `mado@bdb8721` + `nix@5217496`. 4.3 → 4.5 deferred.
 
-`mado::pane`, `mado::tab`, `mado::window` deleted. MCP `split_pane` / `new_tab` removed from mado's MCP surface (those operations live in tear's MCP, exposed by tear-daemon — to be added in Phase 5 if desired). 1,217 lines vanish; the prime directive's "solve once" rule is restored.
+**Phase 4.1 (shipped):** MCP `split_pane` + `new_tab` tool handlers + `SplitPaneInput` struct + their unit tests removed. mado's MCP no longer advertises multi-pane operations.
 
-**Cut-list precondition:** mado main.rs (2,208 LOC) holds `window_for_events.lock().unwrap()` calls throughout the keybind handler. Phase 4 demands replacing those with single-Terminal lookups — substantial refactor risk-bounded by mado's 575-test bin-test suite + the existing scenarios.
+**Phase 4.2 (shipped):** `Action::NewTab` / `CloseTab` / `NextTab` / `PrevTab` / `SplitHorizontal` / `SplitVertical` / `FocusNext` / `FocusPrev` / `ClosePane` enum variants deleted. `parse_action` returns `None` for the corresponding strings + `goto_split:*` + `close_surface`. Default binding count: 26 → 17. main.rs keybind handler arms for these actions deleted. 5 tests removed that exercised the deleted actions. Net `-153` LOC across mado.
+
+**Phase 4.3 — 4.5 (deferred, not started):** Strip `Arc<Mutex<WindowState>>` from main.rs (~113 lines reference WindowState/pane/tab; 34 call `window_for_events.lock()` directly). Refactor `render.rs` to drop the multi-pane branch (`render_multi_pane` + `PaneRect` iteration). Delete `pane.rs` / `tab.rs` / `window.rs`. Verify all 570+ mado tests + every scenario YAML still pass.
+
+Net delete at full completion: 1,217 LOC (pane.rs 418 + tab.rs 331 + window.rs 468). main.rs single-Terminal refactor adds tighter Terminal-direct call sites in place of the WindowState indirection.
+
+**Cut-list precondition:** mado main.rs (2,208 LOC) holds `window_for_events.lock().unwrap()` calls throughout the keybind handler. Phase 4.3 demands replacing those with single-Terminal lookups — substantial refactor risk-bounded by mado's 570-test bin-test suite + the existing scenarios. Each callsite needs `WindowState::focused_pane()` → `terminal.read()` style rewriting + dropping the multi-pane methods (`split`, `new_tab`, `focus_next`, etc.).
 
 ## VII. Cumulative session ledger (Phases 1 → 3.0)
 
@@ -99,8 +111,10 @@ Mado's keybind handlers for split / new-tab / focus-pane call `inproc.split_pane
 | tests | `tear@8ea3fd9` | many-sessions stress + subscriber-cleanup-after-kill |
 | roadmap | `theory@55bfaa7` | this document, kept current |
 | classification | `mado@a0813df` | mado/CLAUDE.md flags pane/tab/window LEGACY |
+| 3.1 MVP | `mado@2297aff` + `nix@da5334f` | `mado tear-attach --gpu` opens real GPU window backed by Terminal + tear subscription + key/resize forwarding (158 LOC new module) |
+| 4.1+4.2 | `mado@bdb8721` + `nix@5217496` | MCP split_pane/new_tab gone, 9 multiplexing keybind Actions gone, default bindings 26→17, net -153 LOC |
 
-**Workspace test total**: 70+ green across tear (35 core w/ 4 proptests + 8 client + 4 daemon + 15 types + others) + 1 mado integration test for tear-attach. Zero flakes across multiple sequential runs.
+**Workspace test total**: 70+ green across tear (35 core w/ 4 proptests + 8 client w/ 4 e2e + 4 daemon + 15 types + others) + 570 mado bin tests + 1 mado tear-attach integration test (full cross-process vertical: tear-client → daemon → InProcess → /bin/sh PTY → reader thread → subscribers → CBOR/UDS → mado-as-subscriber → stdout). Zero flakes across multiple sequential runs.
 
 ## III. What `tear daemon` is for, given mado embeds InProcess
 
