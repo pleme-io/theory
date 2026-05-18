@@ -376,6 +376,16 @@ the BLAKE3 hash of its declared input. Two controllers given the same
 input reach the same fixed point. This is the basis for caching,
 attestation, and provable idempotency.
 
+The **typed realization** of controllers at the work-graph layer is
+[`SHIGOTO.md`](./SHIGOTO.md) — the canonical job-system primitive. A
+Job is a fixed-point operator, a Job DAG is a partial order over
+operators, a Job phase is the operator's position in its convergence
+trajectory. Every pleme-io tool whose internals form a
+dependency-ordered, fallible, retryable, parallelism-bounded work
+graph expresses it as a shigoto Dag (gated by SHIGOTO.md §XII.1's
+promotion criteria; `skip-shigoto:` for legitimate exceptions). Tend
+is the bootstrap consumer (SHIGOTO.md §IX).
+
 ### IV.3 The eight-phase universal loop
 
 Every integration in pleme-io follows the same eight-phase enactment model.

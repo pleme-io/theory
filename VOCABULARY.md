@@ -121,6 +121,20 @@ into the unified theory.
 | **WorkloadRequirements** | The set of constraints a workload imposes. Analog of K8s pod affinity/tolerations. | `convergence-controller/` |
 | **Self-hosting recursion** | The convergence controller's first expression is creating itself. Every cluster past PID 1 contains its own controller. | THEORY.md §IV.4 |
 | **Seven questions** | The design-review forcing function. Declaration, invariants, baseline, render, deploy, drift, remediate. | THEORY.md §IV.6 |
+| **shigoto** | The typed job-system primitive. The seventh foundational pleme-io tier alongside tatara, shikumi, sekkei, takumi, forge, arch-synthesizer. Owns every concern of dependency-ordered, fallible, retryable, parallelism-bounded work-graphs. _Distinct from_ tend (the bootstrap consumer) and from the eight-phase loop (an instance of a shigoto DAG template). | SHIGOTO.md |
+| **Job (shigoto)** | A unit of work in shigoto. Typed `Input`/`Output`/`Error`. Idempotent `execute()`. Inhabits one `JobPhase` at any moment. Identified by a `JobId`. _Distinct from_ generic "job" / K8s Job / cron job. | SHIGOTO.md §III.1 |
+| **JobId** | Stable typed identity of a Job: `(scope, kind, subject)`. Two cycles producing the same typed triple produce the same JobId. Used for resume idempotence. | SHIGOTO.md §III.2 |
+| **Job phase** | One of ten FSM states a Job inhabits: Pending, Gated, Ready, Running, Succeeded, Failed, Retrying, Skipped, Deadlettered, WaitingForOperator. _Distinct from_ "loop phase" (one of 8 convergence steps). | SHIGOTO.md §III.3, §IV |
+| **Job kind** | Typed work class. Two Jobs of the same kind share default budgets, gates, retry policy. Examples: `PullRepoKind`, `RenderTerraformKind`. | SHIGOTO.md §III.4 |
+| **Job DAG** | The dependency-ordered graph of Jobs that a shigoto Scheduler advances. Edges declare "to may not start until from reaches a terminal phase." _Distinct from_ "Workspace DAG" (typescape's cross-state ref graph). | SHIGOTO.md §III.5, §V |
+| **Wave (shigoto)** | A maximal antichain in a Job DAG — the set of Jobs whose upstream ancestors have all reached terminal phases. Jobs in the same wave run concurrently up to budget. _Distinct from_ "loop phase" / "tick." | SHIGOTO.md §V.2 |
+| **Scheduler (shigoto)** | The runtime that advances a Job DAG one tick at a time. `tick(dag) → TickReceipt`. _Not_ a daemon; daemons loop over `tick → wait → tick`. | SHIGOTO.md §III.6 |
+| **Gate (shigoto)** | Typed precondition evaluated against scheduler snapshot. Pure (no IO). IO-dependent gates are themselves Jobs that emit a typed fact a downstream gate checks. | SHIGOTO.md §III.9 |
+| **Budget tree** | Typed three-dimension parallelism envelope: global × by-kind × by-scope. A Job runs iff every applicable dimension has slack. Composition is min-intersection. | SHIGOTO.md §III.7, §VI |
+| **Retry policy (shigoto)** | Typed failure-recovery strategy per Job or per Job kind. `NoRetry`, `Fixed`, `Exponential`, or `Custom(RetryDecider)`. `RetryDecider` is the IO-aware escape hatch. | SHIGOTO.md §III.8 |
+| **Transition emitter** | Non-blocking audit sink for FSM transitions. Sinks: `AuditFileEmitter`, `NatsEmitter`, `MultiEmitter`. The transition log is the canonical history; receipts and dashboards are derived views. | SHIGOTO.md §III.10, §VIII |
+| **TickReceipt** | Derived per-tick rollup of the Scheduler's state: phase counts, transitions this tick, unhealed drift. Realized for free; consumers do not build receipts. Realizes the M10 "ReconcileReceipt" of the tend plan. | SHIGOTO.md §III.11 |
+| **`skip-shigoto:`** | Per-repo escape-hatch note declaring deviation from the prime-directive rule that every work-graph use shigoto. Same shape as `skip-blackmatter:`, `skip-saguao:`. Allowed only for single-step CLIs, pure-data crates, and thin wrappers around external schedulers. | SHIGOTO.md §XII.3 |
 
 ---
 
@@ -336,6 +350,42 @@ the level matters, qualify:
 - **OS process** — kernel-level `pid_t`.
 - **Convergence process** — `ConvergenceProcess` CRD (cluster-level).
 - **Agent session** — MCP agent lifecycle.
+
+### "DAG"
+
+**Before:** "DAG" was used for both the typescape's cross-state
+reference graph (the **Workspace DAG**) and any ad-hoc work-graph in
+a controller's internals.
+
+**After:**
+- **Workspace DAG** — typescape dimension; cross-state references
+  between Pangea workspaces. Parent outputs flow into child
+  `RemoteState.output`. (THEORY.md §III.1.6.)
+- **Job DAG** — shigoto's dependency-ordered Job graph. Edges declare
+  start-after-terminal-phase. (SHIGOTO.md §V.) The default Dag every
+  controller uses to express its internal work.
+
+Both are typed and acyclic; their concerns and consumers are
+disjoint. Always qualify when ambiguous.
+
+### "Phase"
+
+**Before:** "phase" was used for the eight-phase convergence loop's
+steps, for `ProposalPhase` in tend's operator, for `Phase 1` / `Phase
+2` attestation signatures, and informally for any FSM state.
+
+**After:**
+- **Loop phase** — one of 8 convergence steps (DECLARE → …
+  → RECONVERGE). THEORY.md §IV.3.
+- **Job phase** — one of 10 shigoto FSM states (Pending, Gated, Ready,
+  Running, Succeeded, Failed, Retrying, Skipped, Deadlettered,
+  WaitingForOperator). SHIGOTO.md §III.3.
+- **Phase 1 (signature)** — origin signature in attestation. THEORY.md
+  §V.4.
+- **Phase 2 (signature)** — compliance-composed signature. THEORY.md
+  §V.4.
+
+Each is a distinct typed enumeration; never collapse.
 
 All three share Unix process semantics (fork, exec, wait, kill). That
 shared vocabulary is the whole point of THEORY.md §VIII.4.
