@@ -1,0 +1,117 @@
+# MADO ⇄ TEAR — M5 De-Overlap
+
+> Canonical roadmap for cutting feature overlap between **mado** (the
+> pleme-io GPU terminal emulator) and **tear** (the pleme-io
+> tmux-compatible multiplexer). Replaces the older
+> `tear/CLAUDE.md` § "tear ↔ mado pairing" table as the source of
+> truth for the M5 transition.
+
+## I. Destination
+
+| Layer | Owns | Does NOT do |
+|---|---|---|
+| **mado** | GPU rendering, VT byte → cells, IME, scrollback, hyperlinks, kitty graphics, OSC, MCP introspection of the *single visible terminal* | Multiplexing of any kind. Zero `Pane`/`Tab`/`Window` state. Zero "multi-pane render path." |
+| **tear** | Sessions, windows, panes, layouts, splits, focus, keybind tables, status bars, status across client disconnects | GPU pixels. Font shaping. Direct GPU buffer ownership. |
+| **shared** | Typed primitives (`tear-types`), shikumi config style, ishou tokens, parking_lot, mimalloc | — |
+
+**Operator experience:** identical to ghostty + tmux today. `tear` runs inside mado as a normal child process (just like `tmux` inside Alacritty / `ghostty`). The difference is structural: one process draws pixels, one process owns the multiplexer state. No primitive lives in two places.
+
+**Why this matters:** the org-level Compounding Directive forbids "solving the same problem in two repos." Today mado has `pane.rs` (418 LOC), `tab.rs` (331 LOC), `window.rs` (468 LOC) duplicating what tear already does correctly. Every fix has to land in both places; every divergence is silent drift. M5 collapses this.
+
+## II. Real four-phase plan
+
+Phase numbering corresponds to commits in the tear + mado repos.
+
+### Phase 1 — tear-daemon RPC functional ✓ SHIPPED
+
+Commit `tear@0d0a240`. tear-daemon binds a UDS, tear-client connects, every `MultiplexerControl` op round-trips. 21 new tests green. The wire is CBOR over length-prefixed framing (CBOR was chosen because `LayoutNode` uses `#[serde(tag = "kind")]` — bincode rejects internally-tagged enums). `tear daemon` and `tear attach` subcommands work end-to-end.
+
+This unblocks every consumer that wants to drive a running tear from outside the process tree (the `tear` CLI, future scriptable drivers, fleet operators over SSH). It does NOT unblock mado, which goes through Phase 2 instead.
+
+### Phase 2 — tear-core gains per-pane vte parsing + cell grids
+
+**Status:** not started. **Scope:** tear-core's `InProcess::spawn_pty_for` currently logs PTY bytes via a debug closure. M5 needs each pane to own a live `vte::Parser` feeding a `tear_core::PaneGrid` (cell store with cursor, attrs, scrollback). mado's existing `mado::terminal::Terminal` (5,485 LOC) is the natural source — moving it into `tear-core::pane_grid` makes one terminal-state-machine canonical fleet-wide.
+
+**Acceptance:**
+- `InProcess::feed_pane_bytes(pane_id, &[u8])` parses into the per-pane grid.
+- `InProcess::pane_snapshot(pane_id) -> PaneSnapshot` returns the typed cell grid + cursor + scrollback.
+- The 575 mado terminal-state-machine tests run against the moved code unchanged.
+- Per-pane `seqno`, `synchronized_output` flag, hyperlinks, kitty graphics, OSC — all the things mado's renderer's idle-skip path relies on — preserved.
+
+**Why this is the heaviest phase:** it's a 5k LOC code move + ownership boundary change. The receiver (`tear-core`) inherits the entire terminal-state-machine; the donor (`mado`) becomes a pure renderer over a typed grid handle.
+
+### Phase 3 — mado renders `Arc<InProcess>` panes
+
+**Status:** not started. **Depends on:** Phase 2.
+
+**Scope:** replace `mado::render::SharedTerminal` (currently `Arc<RwLock<Terminal>>`) with `Arc<InProcess>` + the focused `PaneId`. Each render frame:
+
+1. Read focused `PaneId` from mado's "view" state (one tiny struct).
+2. Call `inproc.pane_snapshot(focused)` to get the typed cell grid.
+3. Render exactly as today (rect pipeline + text pipeline + post-process).
+
+Mado's keybind handlers for split / new-tab / focus-pane call `inproc.split_pane(...)` etc. directly. No tear-client / no RPC. The InProcess is held in-process, just like a normal Rust struct.
+
+**Acceptance:**
+- All 575 mado tests still pass (they now run against InProcess-backed grids).
+- Existing mado UX is preserved bit-for-bit (Ctrl-B prefix, all keybinds, all MCP introspection).
+- mado's `WindowState::all_panes` / `focused_pane` / etc. become trivial inproc wrappers (or are removed entirely).
+
+### Phase 4 — delete legacy
+
+**Status:** not started. **Depends on:** Phase 3.
+
+`mado::pane`, `mado::tab`, `mado::window` deleted. MCP `split_pane` / `new_tab` removed from mado's MCP surface (those operations live in tear's MCP, exposed by tear-daemon — to be added in Phase 5 if desired). 1,217 lines vanish; the prime directive's "solve once" rule is restored.
+
+## III. What `tear daemon` is for, given mado embeds InProcess
+
+When mado embeds `Arc<InProcess>` directly, the tear-daemon isn't on mado's hot path. It still ships value:
+
+- **CLI access to a running mado**: `tear list` / `tear attach` lets the operator inspect / drive panes from outside the GPU process. mado at boot spins up its own embedded InProcess AND opens a tear-daemon UDS exposing it.
+- **Persistence**: tear-daemon's lifecycle is decoupled from mado's; sessions survive a mado crash. Phase 6 — a future tear-daemon mode that mado can hand off its InProcess to before exit + reconnect from on next launch.
+- **Fleet operators over SSH**: a remote `tear-client` can drive a remote mado's panes for centralized fleet ops.
+- **Non-mado consumers**: any TUI / status-bar / scripted driver that wants typed session info.
+
+So Phase 1's RPC is foundational for tear-as-a-platform, even though mado itself bypasses it.
+
+## IV. Cut-list (what disappears at Phase 4)
+
+From `pleme-io/mado/src/`:
+
+| File | LOC | Goes where |
+|---|---|---|
+| `pane.rs` | 418 | tear-core (`PaneGrid`, layout) |
+| `tab.rs` | 331 | tear-core (window/tab management) |
+| `window.rs` | 468 | tear-core (`Registry`) |
+| Multi-pane branches in `render.rs` | ~200 | Deleted — mado renders one pane at a time |
+| `MCP split_pane` / `new_tab` stubs | ~30 | Deleted — tear-daemon's MCP owns these |
+
+Mado's own `terminal.rs` (5,485 LOC) MOVES to `tear-core::pane_grid` at Phase 2 rather than being deleted — it's the gravitational center of the shared state machine.
+
+## V. Interim posture (today, between Phase 1 and Phase 2)
+
+- mado retains `pane.rs` / `tab.rs` / `window.rs` unchanged.
+- mado's MCP `split_pane` / `new_tab` stay stubs returning a not-implemented response (today's behavior).
+- tear-daemon is functional; `tear attach` proves the RPC works.
+- New tools / scripts / agents that want multiplexer ops use `tear-client`.
+- New mado features should NOT add to `pane.rs` / `tab.rs` / `window.rs` — those modules are slated for deletion.
+
+## VI. Acceptance for "M5 done"
+
+1. `pleme-io/mado/src/{pane,tab,window}.rs` do not exist.
+2. mado's `nix build .#default` produces a binary that depends on `tear-core`.
+3. All 575 mado terminal tests pass + all tear-core tests pass.
+4. Running `mado` on a fresh shell, splitting via Ctrl-B %, and quitting work bit-for-bit identically to today's mado.
+5. `theory/MADO-TEAR-M5.md` (this document) is marked "complete" at the top.
+6. `tear/CLAUDE.md` § "tear ↔ mado pairing" is updated to past-tense.
+
+## VII. Open questions
+
+- **Per-pane vte parser lifecycle**: tear-core owns the parser; what happens if a client subscribes to byte stream during parse? Likely answer: tear-core's parser is always authoritative, byte-stream subscribers receive a *copy* of bytes (Phase 6 — not on M5 critical path).
+- **Kitty graphics / image state**: per-pane in mado today; needs to follow the grid to tear-core. Phase 2 scope.
+- **Search / selection / URL detection**: which side owns them? Probably mado (they're render-time concerns over a snapshot, not state-machine concerns). To be confirmed during Phase 3.
+- **MCP surface split**: mado-MCP keeps `snapshot_grid` / `get_output` / `send_keys` (against the current focused pane). tear-MCP (future) gets `list_sessions` / `split_pane` / `new_window` / etc. Mado's existing `split_pane` / `new_tab` MCP tools either delete or forward to tear's MCP.
+
+---
+
+**Tracking:** this doc is updated at the end of each phase. After Phase 4 lands, mark all phases ✓ at the top and link the final commits.
