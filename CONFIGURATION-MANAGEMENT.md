@@ -157,15 +157,48 @@ Three reasons this is a prime directive, not a suggestion:
 
 ---
 
-## VIII. Status snapshot (2026-05-19)
+## VIII. Status snapshot (2026-05-19, post-audit)
 
-| Tool | shikumi | HM module | NixOS module | Darwin module |
-|---|---|---|---|---|
-| mado | ✓ | ✓ | n/a | ✓ |
-| tear | ✓ (M1 today) | partial | n/a | n/a |
-| frost | ✓ | ✓ | ✓ | ✓ |
-| frostmourne | partial (M2) | ✓ | n/a | n/a |
+| Tool | shikumi | HM module | NixOS | Darwin | Hot-reload | Operator-edited config |
+|---|---|---|---|---|---|---|
+| mado | ✓ | partial | n/a | partial | ✓ | `~/.config/mado/mado.yaml` |
+| tear | ✓ (M1) | — | n/a | n/a | ✓ | `~/.config/tear/tear.yaml` |
+| frost | ✓ | ✓ | ✓ | ✓ | — | `~/.config/frost/frost.yaml` |
+| tend | ✓ | — | — | — | ✓ | `~/.config/tend/config.yaml` |
+| kikai | ✓ | — | — | — | ✓ | `~/.config/kikai/clusters.yaml` |
+| kurage | ✓ | — | — | — | — | `~/.config/kurage/kurage.yaml` |
+| namimado | ✓ | — | — | — | ✓ | `~/.config/namimado/*.lisp` |
+| frostmourne | partial (M2) | ✓ | n/a | n/a | — | (Lisp-native) |
+| kindling | own | — | — | — | ✓ | `kindling/src/config.rs` |
+| ayatsuri | own | — | — | — | ✓ | `ayatsuri/src/config.rs` |
+| umbra | own (TOML) | — | — | — | — | `~/.config/umbra/config.toml` |
+| seibi | none | — | — | — | ✓ | env / CLI |
+| kontena | none | — | — | — | — | env / CLI |
+| cofre | none | — | — | — | — | env / CLI |
+| zoekt-mcp | none | — | — | — | — | env / CLI |
+| codesearch | none | — | — | — | — | env / CLI |
+| kaname | none | — | — | — | — | env / CLI |
 
-Other operator-facing tools (ayatsuri, kaname, kontena, cofre, tend, kikai, seibi, kurage, umbra, codesearch, zoekt-mcp, kindling, namimado, hibikine) are subject to fleet-wide audit results — see `pleme-io/CLAUDE.md` § "Compliance audit" for the next-session table.
+### Reading the table
 
-The directive applies fleet-wide from this commit forward. Every new tool starts compliant by default — substrate's `rust-tool-release-flake.nix` + the per-tool config crate template + the HM/NixOS/Darwin module trio is the canonical scaffold.
+* **shikumi ✓ + HM ✓**: fully compliant. Only `frost` today.
+* **shikumi ✓ + HM —**: schema-compliant but no Nix module trio. Single highest-leverage gap fleet-wide; **5 tools** (`mado`, `tend`, `kikai`, `kurage`, `namimado`) are one HM-module scaffold away from full compliance.
+* **own / none + everything —**: needs both shikumi migration AND module scaffold. 7 tools.
+
+### Migration priority (next 5 sessions)
+
+1. **HM module scaffold blitz** — apply frost's `module/home-manager/default.nix` shape to mado, tend, kikai, kurage. Mechanical; existing schemas already exist. Closes 4 trio gaps in one batch.
+2. **shikumi migration for `own`-pattern tools** — kindling, ayatsuri, umbra. Each has a typed schema today; the lift is the same shape M1 (tear) just demonstrated. ~30 min/tool.
+3. **shikumi adoption for `none`-pattern tools** — seibi, kontena, cofre, zoekt-mcp, codesearch, kaname. Greenfield; each needs a `<tool>-config` crate first. Lower priority because most are CLI-style; some genuinely don't need an operator-edited config (`zoekt-mcp` is just an MCP shim; `kaname` is a server library). For those, a `skip-shikumi:` waiver suffices.
+4. **HM modules for `own`/`none`-pattern tools** — follows once their config crate exists.
+5. **frostmourne M2** — Lisp → YAML render path. Unblocks cross-tool composition.
+
+### Compliance rule going forward
+
+Every PR that touches an operator-facing tool either:
+
+* Maintains compliance (no regression on the table above), OR
+* Adds a `pending-shikumi: M<n>` reference to the tool's `CLAUDE.md` pointing to its migration plan, OR
+* Adds a `skip-shikumi: <one-line reason>` waiver justifying the deviation.
+
+Substrate's `rust-tool-release-flake.nix` + the per-tool config crate template + the HM/NixOS/Darwin module trio is the canonical scaffold for every new tool. Every new tool starts at "shikumi ✓ + HM ✓" by default.
