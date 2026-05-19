@@ -18,10 +18,12 @@ This is the operational realization of the Compounding Directive's "magma fully 
 |---|---|---|---|
 | Reconciler trait | (top-level) | (default) | `magma_test_laws::assert_all_laws(&r, …).await` |
 | Backend trait | [`backend`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/backend.rs) | `backend-laws` | `magma_test_laws::backend::assert_all_laws(&b).await` |
+| Provider resource | [`provider`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/provider.rs) | `provider-laws` | `magma_test_laws::provider::assert_resource_has_field(&cfg, …)` |
 | Pangea architecture | [`architecture`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/architecture.rs) | `architecture-laws` | `magma_test_laws::architecture::assert_all_laws(&cfg)` |
 | Workspace lifecycle | [`workspace`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/workspace.rs) | `workspace-laws` | `magma_test_laws::workspace::assert_all_laws(&cfg)` |
 | Workspace chain | [`chain`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/chain.rs) | `chain-laws` | `magma_test_laws::chain::assert_all_laws(&flow)` |
 | Proptest strategies | [`strategies`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/strategies.rs) | `strategies` | shared generators |
+| Non-panic preflight | [`preflight`](https://github.com/pleme-io/magma/blob/main/magma-test-laws/src/preflight.rs) | `preflight` | `magma_test_laws::preflight::check_workspace_full(&cfg)` |
 
 ### Reconciler trait laws (5)
 
@@ -48,6 +50,26 @@ Every `Backend` impl satisfies:
 Locked across `InMemoryBackend` + `LocalBackend` via `magma-test-laws/tests/backend_law_battery.rs`.
 
 The Backend law battery surfaced a real bug in `LocalBackend::read_state`: calling read on a missing state file generated a fresh UUID v4 lineage every call (because `empty_state_inline()` used `Uuid::new_v4()`). Fixed by materializing empty state to disk on first read (matches OpenTofu's `tofu init` semantics).
+
+### Provider resource laws (9 generic field validators)
+
+Every Pangea typed function (`synth.aws_vpc`, `synth.aws_subnet`, etc.) emits a single TF JSON resource block. The provider layer ships **generic** field validators consumers compose into per-resource test code. No hard-coded resource knowledge — the per-type laws live in the Pangea provider gems themselves; magma-test-laws supplies the primitives.
+
+| Helper | Rule | Catches |
+|---|---|---|
+| `assert_resource_has_field(cfg, type, name, field)` | `required-field-present` | Pangea rendering dropped a required field |
+| `assert_field_is_cidr(cfg, type, name, field)` | `cidr-format` | malformed `10.0.0.0/16` or `::/0` shape |
+| `assert_field_is_arn(cfg, type, name, field)` | `arn-format` | malformed `arn:partition:service:region:account:resource` |
+| `assert_field_is_url(cfg, type, name, field)` | `url-format` | malformed `scheme://host[:port]/path` |
+| `assert_field_is_int_in_range(cfg, type, name, field, min, max)` | `int-in-range` | port outside 1-65535, replicas outside 1-N |
+| `assert_field_is_one_of(cfg, type, name, field, allow_list)` | `one-of` | unrecognized instance type, region, etc. |
+| `assert_resource_has_tags(cfg, type, name, required_keys)` | `tags-required-key` | missing `ManagedBy` / `Environment` etc. |
+| `assert_field_non_empty(cfg, type, name, field)` | `non-empty` | structurally string but empty/whitespace |
+| `assert_no_iam_wildcards(cfg)` | `no-iam-wildcards` | unscoped `Action: "*"` or `Resource: "*"` |
+
+Every violation returns a typed `ProviderViolation { resource, field, rule, message }` so CR status / Prometheus labels / audit logs route on it.
+
+Cross-fixture exercise: `magma-test/tests/integration_provider_laws.rs` runs aws_vpc + aws_subnet CIDR validators against every Pangea fixture; the IAM wildcard auditor runs informationally + surfaces real findings (e.g. cilium ENI policies) for ops review.
 
 ### Architecture composition laws (5)
 
@@ -170,21 +192,37 @@ Open law batteries to author:
 
 ## VII. Test count
 
-Current snapshot (commit `f90dad7`, 2026-05-18):
+Current snapshot (commit `782c452`, 2026-05-19):
 
 ```
-magma workspace: 410 tests pass, 0 failures (with all law features enabled)
+magma workspace:           492 tests pass, 0 failures
+pangea-operator executor:   21 tests pass, 0 failures
 ```
 
-Test classes:
+Test classes in magma workspace:
 
 * 6 Reconciler-impl law batteries (5 laws each)
 * 5 Backend trait law batteries (across 2 impls)
+* 21 Provider resource validators + 4 cross-fixture exercises
 * 9 Architecture composition law tests (incl. negative panics)
 * 10 Workspace lifecycle law tests (incl. import absorption)
 * 9 Chain law tests (incl. negative panics)
 * 5 strategy keep-alive proptests
 * 19 Pangea-architectures fixtures × 6 cross-fixture integration tests
-* (and the ~330 property-based + unit tests covering each substrate primitive's internals)
+* ~36 magma-rubygems tests covering M0 lockfile parser + M0.5 emitter + M1 Gemfile parser + M1.5 gemspec parser + M7 gemset.nix emission + M3 structural (cache + nix-base32 sha256)
+* ~330 property-based + unit tests covering each substrate primitive's internals (chain, replay, fsm, bundle, drift, budget, engine, controller)
 
 Every load-bearing promise the substrate makes is mechanically verified, not asserted on faith.
+
+## VIII. Operator integration — what composes today
+
+`pangea-operator`'s `MagmaExecutor` composes the substrate end-to-end in plan/apply:
+
+1. **Preflight** — `magma_test_laws::preflight::check_workspace_full(&cfg)` runs architecture + workspace laws before reading state. Malformed workspaces fail at the controller; they never reach the live backend.
+2. **Drift classification** — every plan classified per `DriftPolicy::conservative_default()`; typed `decision` per change surfaces in stdout JSON.
+3. **Lifecycle FSM** — every reconcile threads Idle → Planning → Applying → Verifying → Stable / Failed.
+4. **Bundle attestation** — every reconcile produces a BLAKE3-attested `magma_bundle::Bundle` written to `magma-bundle.json`, carrying plan + outcome + drift + lifecycle + audit chain.
+5. **Audit chain** — BLAKE3-Merkle-linked typed events (PlanComputed, DriftClassified, ApplyOutcome) captured into `Bundle.audit` + optionally written to a JsonLinesSink at `audit_log_path`. `magma_stream::verify_chain` verifies integrity post-hoc.
+6. **Gem-tree attestation** — when workspace ships `Gemfile.lock`, magma-rubygems parses + computes BLAKE3 closure identity; threaded into `Bundle.gem_tree_attestation`.
+
+Six magma substrate primitives compose into one operator path. Compliance teams export the bundle + verify one BLAKE3 (`Bundle.bundle_id`); everything else is derivable.
