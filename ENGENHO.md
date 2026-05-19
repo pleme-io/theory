@@ -24,7 +24,7 @@
 > target — `skip-engenho:` as the first line of a cluster's `engenho.lisp`
 > defers migration. The wire compatibility contract is byte-exact at the
 > surfaces listed in §III: kubectl, controller-runtime clients, FluxCD,
-> Crossplane, Helm, every operator built against k8s 1.32 — all run
+> Crossplane, Helm, every operator built against k8s 1.34 — all run
 > unchanged. No upstream Go is vendored. No `kine` is shipped. No `etcd` is
 > shipped. The entire control plane is one Rust binary built by
 > `substrate/lib/rust-tool-release-flake.nix`.
@@ -317,8 +317,11 @@ operator selection at cluster create time.
 ### III.1. kubectl
 
 Engenho speaks the upstream Kubernetes REST API on `:6443`. The reference
-target is **v1.32** (current N-2 of upstream v1.34 as of 2026-05-18).
-Every endpoint kubectl needs is implemented:
+target is **v1.34** — the current upstream stable as of 2026-05-19 and
+the k8s minor the kasou+kikai bridge is already running in production
+locally. Engenho ships ONLY when Sonobuoy `--mode=certified-conformance`
+passes on the 1.34 surface with zero skips (§XIII). Every endpoint
+kubectl needs is implemented:
 
 | Path | Verbs | Source |
 |---|---|---|
@@ -334,10 +337,10 @@ Every endpoint kubectl needs is implemented:
 | `/api/v1/.../pods/{n}/portforward` | GET upgrade | `engenho-kubelet::portforward` |
 | `/apis/authorization.k8s.io/v1/selfsubjectaccessreviews` | POST | `engenho-apiserver::auth::can_i` |
 
-Compatibility contract: `kubectl version --client=v1.32 --server` succeeds
-against engenho. `kubectl apply -f any-valid-1.32-manifest.yaml` succeeds.
+Compatibility contract: `kubectl version --client=v1.34 --server` succeeds
+against engenho. `kubectl apply -f any-valid-1.34-manifest.yaml` succeeds.
 `kubectl get crds` returns the engenho-installed CRD set. Operators built
-against k8s 1.32 (Crossplane providers, FluxCD, cert-manager,
+against k8s 1.34 (Crossplane providers, FluxCD, cert-manager,
 external-secrets, KEDA, Karpenter, Cilium when used as CNI) run unchanged.
 
 ### III.2. etcd v3 gRPC
@@ -540,13 +543,14 @@ CI gate: `cargo test --workspace --features e2e --release`. ~15-30 minutes.
 ### V.7. L6 — CNCF Certified Kubernetes Software Conformance
 
 The ultimate gate. Sonobuoy `--mode=certified-conformance` against a real
-3-node engenho cluster. The full `[Conformance]` tag suite (~300 tests as
-of v1.32) must pass with **zero skips**. Test artifacts (`e2e.log` +
+3-node engenho cluster. The full `[Conformance]` tag suite (~360 tests as
+of v1.34) must pass with **zero skips**. Test artifacts (`e2e.log` +
 `junit_01.xml`) are tameshi-attested and submitted to
 [cncf/k8s-conformance](https://github.com/cncf/k8s-conformance).
 
-CI gate: gates **M4 release**. Until M4, partial Sonobuoy passes are
-acceptable as long as the running per-SIG pass-rate climbs each PR.
+CI gate: gates **M4 release** — the engenho ship gate (§XIII). Until M4,
+partial Sonobuoy passes are acceptable as long as the running per-SIG
+pass-rate climbs each PR.
 
 ### V.8. L7 — attested release
 
@@ -633,8 +637,8 @@ L3 wire-conformance fixtures vendored from upstream. The list:
 
 - `etcd-io/etcd@v3.5.21`'s KV/Watch/Lease integration subset (~120 tests
   reusable; balance is Raft + RAFT-LOG which engenho doesn't need until M1).
-- `kubernetes/cri-api@v1.32.0` conformance subset (~80 tests).
-- `kubernetes/kubernetes@v1.32.0` test/cmd subset (~120 commands).
+- `kubernetes/cri-api@v1.34.0` conformance subset (~80 tests).
+- `kubernetes/kubernetes@v1.34.0` test/cmd subset (~120 commands).
 - `containernetworking/cnitool@latest`.
 - `kubernetes/kubernetes/api/openapi-spec/v3/*.json` round-trip schemas.
 
@@ -867,8 +871,9 @@ substrate. No phase is allowed to ship without its full L0-L4 test surface
 ### M0.0 — Generation pipeline (the load-bearing primitive)
 
 **Scope.** `engenho-types` only. `forge-gen` ingest of upstream OpenAPI v3
-(pinned to v1.32). Generated source for ALL ~150 core+stable kinds.
-Round-trip tests against upstream OpenAPI schemas.
+(pinned to v1.34 per §XIII ship-gate alignment). Generated source for
+ALL ~150 core+stable kinds. Round-trip tests against upstream OpenAPI
+schemas.
 
 **Test gates.** L0 (compiles). L1 (per-kind unit tests for
 serialize/deserialize/JSON-Schema round-trip). L3 (OpenAPI v3 round-trip
@@ -1182,10 +1187,10 @@ ship nftables-only at M0.4; eBPF backend is an M2 optional plugin.
 
 ### XII.4. /exec SPDY vs WebSocket v5
 
-Kubernetes 1.32 supports both SPDY (legacy) and WebSocket v5 (newer) for
-exec/attach/portforward upgrades. WebSocket v5 is the recommended path.
-Decision: implement WebSocket v5 first; SPDY fallback only if a deployed
-kubectl version absolutely needs it.
+Kubernetes 1.34 supports both SPDY (legacy) and WebSocket v5 (default
+since 1.30). WebSocket v5 is the recommended path. Decision: implement
+WebSocket v5 first; SPDY fallback only if a deployed kubectl version
+absolutely needs it.
 
 ### XII.5. Audit log — first-class or aux?
 
@@ -1202,16 +1207,135 @@ Recommendation: separate repo. Tatara stays foundational; engenho stays
 Tier 2 per the naming convention. The surgery lands as a tatara PR,
 engenho consumes it via Cargo.
 
-### XII.7. Conformance target — v1.32 vs newest stable
+### XII.7. Conformance target — v1.34 (resolved 2026-05-19)
 
-Kubernetes minor cadence is ~4 months. By M4 release (12-15 months from
-M0.0), upstream stable will be ~v1.36. Decision: lock to v1.32 surface
-for M0-M3; bump to N-2 at M4 prep based on CNCF certification windows.
+Original plan (M0.0): lock to v1.32 (N-2 of v1.34) for stability margin.
+Revised (2026-05-19): bump to **v1.34** — the kasou+kikai bridge already
+runs 1.34 in production locally; chasing the current stable surface
+maximizes operator alignment between the bridge runtime and engenho's
+native runtime. By M4 release (~12-15 months from M0.0), upstream
+stable will be ~v1.37; the bridge will track that minor in parallel.
+Final ship-gate language is §XIII (no engenho release ships without
+certified-conformance pass on 1.34 with zero skips). The minor bump is
+mechanical — swap vendored OpenAPI under `engenho-types/vendor/openapi/`,
+regenerate via `kube-forge --check`, re-run Sonobuoy.
 
 ### XII.8. Repo location — pleme-io/engenho or akeylesslabs/engenho?
 
 Engenho is fleet substrate, not customer-facing — pleme-io/engenho is the
 default. Akeyless integration (if any) goes in a sibling repo.
+
+---
+
+## XIII. Ship gate — CNCF Certified Kubernetes Software Conformance on v1.34
+
+This section is the single source of truth on when engenho is allowed to
+ship. Per Operating Principle #0 (path-of-least-resistance is a cardinal
+sin), the destination is named before the path: engenho's destination is
+a **certified** Kubernetes distribution, not "kubectl mostly works
+locally." The path-down is the M0–M5 phase table in §X; §XIII is the
+unmovable gate at the end of it.
+
+### XIII.1. The rule
+
+**No engenho release artifact promotes past staging without a fresh
+Sonobuoy `--mode=certified-conformance` pass against a real 3-node
+engenho cluster running Kubernetes v1.34 with ZERO `[Conformance]`-tag
+skips.**
+
+"Fresh" = on the exact git revision the artifact is built from, against
+the exact engenho-types catalog the artifact links. Stale runs do not
+count. "Zero skips" is literal: the entire upstream `[Conformance]` tag
+suite (~360 tests in v1.34) must execute and pass. A "skipped" test
+falls outside the gate the same way a "failed" test does.
+
+### XIII.2. Why 1.34 specifically
+
+- The kasou+kikai bridge already runs k3s v1.34 in production locally
+  (the operator-facing `engenho-local` cluster on this Mac as of
+  2026-05-19). Targeting 1.34 means bridge-runtime and native-runtime
+  share an API surface; operator scripts/manifests authored against
+  the bridge work unchanged once engenho takes over.
+- Upstream Kubernetes minor cadence is ~4 months; chasing N-2
+  (the original v1.32 lock) creates a permanent two-minor lag that
+  shows up at every Crossplane / FluxCD / cert-manager / KEDA upgrade.
+  Chasing current stable instead means consumers never see "engenho
+  doesn't speak this minor yet" as a regression.
+- The bump is mechanical (§XII.7) — swap vendored OpenAPI, regenerate
+  via `kube-forge --check`, re-run Sonobuoy. Future minor bumps follow
+  the same recipe.
+
+### XIII.3. What "ship" means
+
+The gate applies to ANY artifact named `engenho` that escapes the local
+developer loop:
+
+- A tag pushed to `pleme-io/engenho` (any `v*` tag).
+- A `crates.io` publish of `engenho` or any `engenho-*` crate.
+- A container image pushed to `registry.plo.quero.cloud/engenho`.
+- A `cartorio` receipt entry naming engenho.
+- A FluxCD `HelmRelease` or `caixa Aplicacao` selecting an engenho
+  RuntimeClass against a non-local cluster.
+
+Local builds, in-repo `cargo test`, M0.0 placeholder binaries, and
+draft PRs do NOT trip the gate. The gate is at promotion, not at
+authorship.
+
+### XIII.4. What's allowed before the gate is met
+
+Per §V.7, partial Sonobuoy passes climb during M0-M3. Specifically:
+
+- M0.0-M0.4: per-SIG pass-rate may climb monotonically across PRs.
+  Skips and failures are tolerated as long as the running pass-rate
+  graph climbs each PR.
+- M1: stretch goal of single-node conformance pass on a 1.34 surface
+  (~150 of ~360 conformance tests passing, the kubectl-facing subset).
+- M2-M3: caixa-native + mesh-native subsystems landing. Conformance
+  pass-rate keeps climbing; remaining skips named explicitly in the
+  PR description so the trend is auditable.
+- M4: the gate flips. Sonobuoy emits zero skips. Engenho ships.
+
+### XIII.5. Operator override
+
+There is exactly one operator-override path, and it is a documented
+escape hatch — not a workaround:
+
+```text
+# Inside the artifact's commit message, on its own line:
+ship-gate-override: <reason> + <CNCF-certification-window-link>
+```
+
+This is reserved for the case where CNCF moves the conformance test
+list mid-window (rare, ~once per minor) and the artifact's Sonobuoy
+run is against the *previous* test list. The override does NOT permit
+shipping with red tests; it permits shipping against a recently-bumped
+test list as long as a fresh re-run is queued behind the artifact.
+Any other use of the override is a CI-rejected drift signal.
+
+### XIII.6. How this gate is enforced
+
+The M4 PR-gate `ship-gate` workflow:
+
+1. Spins a real 3-node engenho cluster via kasou+kikai (the same
+   substrate consumers run locally, scaled to three VMs).
+2. Runs `sonobuoy run --mode=certified-conformance --plugin e2e
+   --kube-conformance-image-version v1.34.0`.
+3. Parses `e2e.log` + `junit_01.xml`; asserts skips == 0 and failures == 0.
+4. Tameshi-receipts the run output; the receipt is part of the release
+   artifact (cartorio-stored, lacre-signed).
+5. PR cannot merge without a green run on the exact HEAD commit.
+
+The workflow is generated from the same `pleme-actions` typed action
+catalog the rest of the fleet uses — no hand-authored YAML in
+`.github/workflows/`.
+
+### XIII.7. Cross-references
+
+- §III.1 — wire-compatibility surface for 1.34.
+- §V.7 — L6 testing layer (Sonobuoy mechanics).
+- §VII.6 — verifiability surface (the ~360 `[Conformance]` tests).
+- §X M4 — the phase that releases past the gate.
+- §XII.7 — why 1.34 (resolved 2026-05-19).
 
 ---
 
