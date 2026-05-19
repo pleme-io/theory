@@ -173,15 +173,34 @@ Today's interim — operator-side bundler + nix + tofu still present — is the 
 * M0 — Gemfile.lock parser + BLAKE3 attestation ✅
 * M0 — wired into pangea-operator MagmaExecutor ✅
 * M0 — Bundle.gem_tree_attestation field ✅
-* M1 — Gemfile/gemspec parser ⬜
+* M0.5 — Gemfile.lock emitter (canonical, structural round-trip) ✅
+* M1 — Gemfile parser (narrow Pangea subset) ✅
+* M1.5 — gemspec parser ⬜
 * M2 — Molinillo-style resolver ⬜
-* M3 — async fetcher + BLAKE3 blob cache ⬜
+* M3 — async fetcher + nix-hash sha256 ⬜
 * M4 — VirtualGemTree + native ext compilation ⬜
 * M5 — pangea-ruby-eval bridge (operator removes `bundle install`) ⬜
 * M6 — bundler removed from operator startup ⬜
-* M7 — bundix-equivalent (in-memory gemset.nix emission) ⬜
+* M7 — bundix-equivalent (in-memory gemset.nix emission, structural) ✅
+* M7.x — sha256 fill-in (needs M3) ⬜
 * M8 — magma-nix (in-memory Nix expression evaluator + store materialization) ⬜
 * M9 — magma-tfmod (TF module → Pangea typed primitive generator) ⬜
 * M10 — TF module-derived primitives as first-class Pangea citizens ⬜
 
+**CLI surfaces today:**
+* `magma rubygems gemset-from-lock` — bundix-equivalent ✅
+* `magma rubygems attest-lock` — BLAKE3 closure identity ✅
+* `magma rubygems parse-gemfile` — typed Manifest JSON ✅
+* `magma rubygems parse-lock` — typed Lockfile JSON ✅
+
+**Test count today:** magma workspace 456 passing, 0 failing across
+~36 magma-rubygems tests + all the existing substrate batteries.
+
 The platform is being assembled one typed primitive at a time. Every primitive that lands removes one external dependency + adds one attested compliance artifact. Compound interest on the substrate.
+
+**Today's deltas (single session, mantra-driven):** M0 parse + M0.5
+emit + M1 Gemfile parse + M7 gemset.nix emission + CLI surface +
+operator integration (Bundle.gem_tree_attestation populated when
+workspace ships Gemfile.lock). The path from "user types
+`bundle install`" to "magma owns the closure end-to-end" has had
+its first half landed.
