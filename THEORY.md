@@ -18,19 +18,39 @@ used here exactly once.
 
 ## Part I — The Frame
 
-### I.1 The core claim
+### I.1 The core claim — the Five Beats
 
-Software is a _declaration of desired state_, a _proof that the declaration
-is well-formed_, a _rendering of the declaration into an executable
-artifact_, and a _convergence of the running world toward the declared
-state_. All four are constructive. All four are checkpointed. All four are
-typed. None of them is an exception.
+Software is
+
+1. a _declaration of desired state_,
+2. a _proof that the declaration is well-formed_,
+3. a _rendering of the declaration into an executable artifact_,
+4. a _convergence of the running world toward the declared state_, and
+5. a _continuously-renewed attestation that the convergence is being maintained_.
+
+All five are constructive. All five are checkpointed. All five are typed.
+None of them is an exception.
 
 This is not a slogan. It is a disciplinary commitment with concrete
 consequences that recur in every pillar below. When you are confused about
 whether some piece of the system is "well-designed" in pleme-io terms, ask
-whether it makes each of the four steps visible and verifiable. If it
+whether it makes each of the five beats visible and verifiable. If it
 doesn't, it isn't.
+
+The first four beats were named in earlier editions of this document; the
+fifth was implicit and now explicit. Beats 1–3 happen once per declaration
+change. Beat 4 begins at deploy and continues indefinitely. Beat 5 is the
+*proof-of-life* of beat 4 — a typed receipt produced every reconcile tick,
+chained via BLAKE3, signed via Ed25519. Beat 5 is what distinguishes a
+*deployed* platform from a *running* platform: deployed = once-correct;
+running = continuously-correct, with a typed audit trail to prove it.
+
+The fifth beat is operationalized in
+[`CONTINUOUS-SOLUTION-MACHINE.md`](./CONTINUOUS-SOLUTION-MACHINE.md) via
+the **promessa** primitive (typed business outcomes), the **anomalia**
+primitive (typed anomaly response), and the **OutcomeChain** /
+**AnomalyChain** typed attestation peers. The structural theorem is in
+§IV.7 below; the connecting thread is §VIII.9.
 
 ### I.2 The twelve pillars
 
@@ -488,6 +508,58 @@ they cannot answer all seven, the design is incomplete.
    occurs?
 
 Review meetings that don't produce answers to all seven reschedule.
+
+### IV.7 The Continuous Solution Machine — the Viggy Method
+
+Kubernetes is the canonical realization of a **universal fixed-point
+operator** for typed business state. Every controller is a function
+`(desired, observed) → action-to-close-gap` running forever; each tick
+mutates the observed state; the system is **continuously solving**
+"make observed match declared." Any business concern reducible to that
+shape — uptime, cost, compliance, KPIs, security — is a controller in
+disguise. They belong as typed CRDs on the cluster, not in dashboards
+/ runbooks / spreadsheets / on-call rotations.
+
+This is **the fifth beat** of §I.1 made structural: the running
+cluster is a continuously-renewed proof that declared promises are
+being held. The eight-phase loop's eighth phase (RECONVERGE) is the
+**Seven-Beat Convergence Tick** (Observe → Diff → Classify → Decide
+→ Act → Attest → Tick) executed as the steady-state mode of operation —
+implemented as a shigoto Dag of depth 7, trait laws property-tested.
+
+**The Viggy Method** is the canonical name for this default
+development mode (etymology: from Portuguese *vigência*, "in force /
+currently valid" — the legal sense of a contract currently and
+continuously in effect). Every typed promessa runs under Viggy:
+declared once, observed every tick, drift classified, remediation
+typed, attestation chained. The fleet-side methodology peer of
+Blackmatter Development (SDLC) and Constructive Substrate Engineering
+(typescape).
+
+The new typed primitives sit *above* engenho, magma, pangea-operator,
+FluxCD, caixa, saguao, cofre and **consume** their typed surfaces;
+they reimplement none of them. **promessa** declares business
+outcomes; **anomalia** declares typed anomaly classes;
+**PromessaController** + **AnomalyController** run the seven-beat tick
+and cross-controller routing; **OutcomeChain** + **AnomalyChain** are
+continuously-renewed attestation peers of tameshi's static
+HeartbeatChain; **RemediationPolicy** + **EscalationLadder** type the
+response; **PromessaLattice** mirrors the compliance lattice at
+runtime.
+
+Two new ★★ directives operationalize the Viggy Method:
+
+- **★★ CONTINUOUS CONVERGENCE — controllers, not runbooks.**
+- **★★ PROVABLE OUTCOMES — every promise is a continuously-attested theorem.**
+
+Pillar 7 widens from "deploys workloads" to "runs the Viggy Method."
+Pillar 12 extends from build-time to runtime. No new pillars; the
+existing twelve hold; their interpretation widens. Exceptions are typed
+waivers (`skip-continuous-convergence:` / `skip-provable-outcomes:`),
+not informal carve-outs.
+
+Canonical spec:
+[`CONTINUOUS-SOLUTION-MACHINE.md`](./CONTINUOUS-SOLUTION-MACHINE.md).
 
 ---
 
@@ -996,16 +1068,53 @@ chain. The running system IS the business, converged from a single
 declaration. There is no "infrastructure team" separate from the
 "product team"; there is one declaration and one convergence process.
 
+### VIII.9 The fractal controller pattern
+
+The reconciliation loop is not specific to Kubernetes. It is the
+**universal shape of any continuous solution loop** — the substrate
+of the Viggy Method (§IV.7). Pleme-io is **a fractal of typed
+reconcilers**, Kubernetes principal, every other layer peer:
+
+| Layer | Desired | Observed | Diff | Act |
+|---|---|---|---|---|
+| **engenho (workloads)** | Deployment / StatefulSet spec | Pod state via kube-watch | Reconciler diff | kube-apply |
+| **magma (cloud IaC)** | Terraform-shaped Pangea slice | Cloud provider state | magma-plan | magma-apply |
+| **pangea-operator (universal)** | Any declarative API config | Provider read_state | `Reconciler::compute_plan` | `Reconciler::apply` |
+| **FluxCD (GitOps)** | Git tree | Cluster state via kube-watch | Kustomize diff | kube-apply |
+| **caixa (SDLC)** | Caixa Servico spec | HelmRelease + pods | caixa-mesh diff | helmrelease upsert |
+| **saguão (identity)** | `(defcrachá …)` | Authentik + RBAC | crachá-controller diff | passaporte + vigia upsert |
+| **cofre (secrets)** | `SecretRef` | Backend secret state | cofre diff | backend write |
+| **mado (terminal UI)** | engawa render graph + UI spec | Frame buffer + input | engawa diff | wgpu draw call |
+| **blackmatter (workstation)** | HM module config | activation result | nix-darwin diff | switch-to-configuration |
+| **tatara-reconciler (services)** | tatara service spec via NATS | service observed state | tatara-reconciler diff | service-action emit |
+| **LLM-as-controller (agent)** | conversation goal | conversation + tool results | model inference | tool call |
+| **promessa (business outcomes)** | `(defpromessa …)` | shinryu observation | promessa-diff (severity-classified) | act via principal-layer controller |
+
+Same shape, different state spaces. mado / blackmatter /
+tatara-reconciler / LLM agents are peers (not strictly Kubernetes) all
+running the seven-beat tick (Observe → Diff → Classify → Decide → Act
+→ Attest → Tick). promessa is a new peer sitting above all of them,
+declaring outcomes that compose across layers via the PromessaLattice
+(§IV.7). **The operator's mental model is uniform:** declare a spec,
+observe a chain, query the audit log, fire a remediation — same
+primitive moves at every layer.
+
+Canonical spec:
+[`CONTINUOUS-SOLUTION-MACHINE.md`](./CONTINUOUS-SOLUTION-MACHINE.md).
+
 ---
 
 ## Part IX — Quick Reference
 
 ### IX.1 The one-line summary
 
-> **Rust owns types. Lisp owns flow. shikumi owns config. forge-gen owns
-> APIs. Pangea owns infrastructure. arch-synthesizer owns the typescape.
-> Nix owns images. Helm+Kustomize+FluxCD own deploys. substrate owns the
-> SDLC. tameshi owns the proof chain. JIT Infrastructure owns compute.
+> **Rust owns types. Lisp owns flow. shikumi owns config. forge-gen
+> owns APIs. Pangea owns infrastructure. arch-synthesizer owns the
+> typescape. Nix owns images. Helm+Kustomize+FluxCD own deploys.
+> substrate owns the SDLC. tameshi owns the static proof chain. JIT
+> Infrastructure owns compute. **The Viggy Method owns the continuous
+> solution** — promessa declares the typed outcome, OutcomeChain
+> attests it tick by tick, anomalia + AnomalyChain type the response.
 > Generation over composition, every time.**
 
 ### IX.2 The six-line contract (for every new typed domain)
@@ -1055,6 +1164,9 @@ artifact hash ⊕ control hash ⊕ intent hash
 | AST domains | `pleme-io/arch-synthesizer/src/ast_domains.rs` + `skills/ast-domains/` |
 | Convergence flow | `skills/convergence-flow/` (the 8-phase loop) |
 | Convergence processes | `pleme-io/convergence-controller/` |
+| The Viggy Method (continuous solution machine) | `theory/CONTINUOUS-SOLUTION-MACHINE.md` (promessa + anomalia + OutcomeChain + AnomalyChain + Seven-Beat Tick + the default development mode) |
+| Universal Reconciler engine | `theory/CONVERGENCE-SUBSTRATE.md` (pangea-operator + 23 declarative APIs) |
+| Controller authoring | `theory/LISP-YAML-CONTROLLERS.md` (tatara-lisp + YAML + WASM) |
 | Knowable platform | `pleme-io/pangea-sim/` + `skills/knowable-platform/` |
 | Compliance controls | `pleme-io/compliance-controls/` + `skills/compliant-systems/` |
 | Attestation | `pleme-io/tameshi/` + `skills/attestation/` |
@@ -1111,6 +1223,8 @@ Stop at diminishing returns.
 
 > Rust is the kernel. Lisp is the interface. The derive is the bridge.
 > The typescape is the source. The morphism is the rendering. The
-> controller is the motion. The attestation is the seal. The lattice is
-> the structure. The process is the life. Everything else compounds on
-> top.
+> controller is the motion. The static attestation is the seal. The
+> lattice is the structure. The process is the life. The promessa is
+> the promise. The OutcomeChain is the continuously-renewed proof. The
+> AnomalyChain is the record of response. **The Viggy Method is the
+> practice.** Everything else compounds on top.
